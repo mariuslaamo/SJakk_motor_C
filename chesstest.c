@@ -4,7 +4,14 @@
 #include <stdlib.h>
 #include <time.h>
 
-char board[64] = {
+typedef struct {
+    char board[64];
+    int moved[6];
+    int en_passant[2];
+    int move_number;
+} Position;
+
+const char start_board[64] = {
     'r','n','b','q','k','b','n','r', // black
     'p','p','p','p','p','p','p','p',
     '.','.','.','.','.','.','.','.',
@@ -15,17 +22,14 @@ char board[64] = {
     'R','N','B','Q','K','B','N','R'
 };
 
-int moved[6] = {0, 0, 0, 0, 0, 0}; 
-
-char files[8] = {
-    'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'
-};
-
-char brikker[6] = {
-    'p', 'n', 'b', 'r', 'q', 'k'
-};
-
-int en_passant_move[2] = {0, 0};
+void init_position(Position *pos)
+{
+    memcpy(pos->board, start_board, 64);
+    memset(pos->moved, 0, sizeof(pos->moved));
+    pos->en_passant[0] = 0;
+    pos->en_passant[1] = 0;
+    pos->move_number = 0;
+}
 
 int is_enemy(char target_piece, int my_color) {
     if (target_piece == '.')
@@ -43,20 +47,9 @@ int is_enemy(char target_piece, int my_color) {
     return target_color != my_color;
 }
 
-void move_to_index(char move[], int out[2]) { // gjør om et trekk (e2e4) til en index 
-    char from_file = move[0];
-    char from_rank = move[1];
-    char to_file = move[2];
-    char to_rank = move[3];
-    int filecount;
-
-    for (filecount = 0; from_file != files[filecount]; filecount++){}
-    int rank = from_rank - '0';
-    out[0] = filecount + 8*(8 - rank);
-
-    for (filecount = 0; to_file != files[filecount]; filecount++){}
-    int rank2 = to_rank - '0';
-    out[1] = filecount + 8*(8 - rank2);
+void move_to_index(char move[], int out[2]) {
+    out[0] = (move[0] - 'a') + 8 * (8 - (move[1] - '0'));
+    out[1] = (move[2] - 'a') + 8 * (8 - (move[3] - '0'));
 }
 
 void index_to_move(char move[5], int in[2]) { // gjør om en index til et trekk (e2e4)
@@ -65,66 +58,68 @@ void index_to_move(char move[5], int in[2]) { // gjør om en index til et trekk 
     int to_file = in[1] % 8;
     int to_rank = 8 - (in[1]/8);
 
-    move[0] = files[from_file];
+    move[0] = 'a' + from_file;
     move[1] = '0' + from_rank;
-    move[2] = files[to_file];
+    move[2] = 'a' + to_file;
     move[3] = '0' + to_rank;
-    move[4] = '\0';    
+    move[4] = '\0';
 }
 
 
-void board_print()
+void board_print(const Position *pos)
 {
-    for (int i = 0; i < 64; i++) 
+    for (int i = 0; i < 64; i++)
     {
-        if (i % 8 == 0) 
+        if (i % 8 == 0)
         {
             printf("%d ", 8 - (i / 8));
             printf(" ");
         }
 
-        printf("%c", board[i]);
+        printf("%c", pos->board[i]);
 
-        if (i % 8 == 7) 
+        if (i % 8 == 7)
         {
             printf("\n");
         }
-    }   
+    }
     printf("\n");
     printf("   ");
-    for (int k = 0; k < 8; k++) 
+    for (int k = 0; k < 8; k++)
     {
-        printf("%c", files[k]);
+        printf("%c", 'a' + k);
     }
     printf("\n");
 }
 
-void en_passant_move_change(char move[], char piece)
+void en_passant_move_change(Position *pos, char move[], char piece)
 {
     int index[2];
     move_to_index(move, index);
-    if ((piece == 'p' && index[1] - index[0] == 16) || (piece == 'P' && index[0] - index[1] == 16))
+    if ((piece == 'p' && index[1] - index[0] == 16)
+        || (piece == 'P' && index[0] - index[1] == 16))
     {
-        en_passant_move[0] = index[0];
-        en_passant_move[1] = index[1];
+        pos->en_passant[0] = index[0];
+        pos->en_passant[1] = index[1];
     }
     else
     {
-        en_passant_move[0] = 0;
-        en_passant_move[1] = 0;
+        pos->en_passant[0] = 0;
+        pos->en_passant[1] = 0;
     }
 }
 
-int en_passant(char board[], int index[])
+int en_passant(const Position *pos, int index[])
 {
-    if (en_passant_move[1] != 0)
+    if (pos->en_passant[1] != 0)
     {
-        int beside_pawn = (index[0] % 8 != 0 && index[0] - 1 == en_passant_move[1]) || (index[0] % 8 != 7 && index[0] + 1 == en_passant_move[1]);
-        if (board[index[0]] == 'P' && beside_pawn && board[en_passant_move[1]] == 'p')
+        int beside_pawn = (index[0] % 8 != 0 && index[0] - 1 == pos->en_passant[1])
+                       || (index[0] % 8 != 7 && index[0] + 1 == pos->en_passant[1]);
+        if (pos->board[index[0]] == 'P' && beside_pawn && pos->board[pos->en_passant[1]] == 'p')
         {
             return 1;
         }
-        if (board[index[0]] == 'p' && beside_pawn && board[en_passant_move[1]] == 'P')
+        if (pos->board[index[0]] == 'p' && beside_pawn && pos->board[pos->en_passant[1]] == 'P')
         {
             return 1;
         }
@@ -132,43 +127,65 @@ int en_passant(char board[], int index[])
     return 0;
 }
 
-void move_push(char board[], char move[])
+void move_push(Position *pos, char move[])
 {
     int index[2];
     move_to_index(move, index);
 
-    char piece = board[index[0]];
+    char piece = pos->board[index[0]];
 
-    if (en_passant(board, index) == 1)
+    if (en_passant(pos, index) == 1)
     {
-        // fjerner bare bonden hvis trekket faktisk er en passant (går til ruta bak bonden som gikk to frem)
-        if (isupper(piece) && index[1] + 8 == en_passant_move[1])
+        // fjerner bare bonden hvis trekket faktisk er en passant
+        // (går til ruta bak bonden som gikk to frem)
+        if (isupper(piece) && index[1] + 8 == pos->en_passant[1])
         {
-            board[index[1]+8] = '.';
+            pos->board[index[1]+8] = '.';
         }
-        if (islower(piece) && index[1] - 8 == en_passant_move[1])
+        if (islower(piece) && index[1] - 8 == pos->en_passant[1])
         {
-            board[index[1]-8] = '.';
+            pos->board[index[1]-8] = '.';
         }
     }
 
-    if (piece == 'K' && index[0] == 60 && index[1] == 62) {board[63] = '.'; board[61] = 'R';}
-    if (piece == 'K' && index[0] == 60 && index[1] == 58) {board[56] = '.'; board[59] = 'R';}
-    if (piece == 'k' && index[0] == 4 && index[1] == 6) {board[7] = '.'; board[5] = 'r';}
-    if (piece == 'k' && index[0] == 4 && index[1] == 2) {board[0] = '.'; board[3] = 'r';}
+    if (piece == 'K' && index[0] == 60 && index[1] == 62) {
+        pos->board[63] = '.';
+        pos->board[61] = 'R';
+    }
+    if (piece == 'K' && index[0] == 60 && index[1] == 58) {
+        pos->board[56] = '.';
+        pos->board[59] = 'R';
+    }
+    if (piece == 'k' && index[0] == 4 && index[1] == 6) {
+        pos->board[7] = '.';
+        pos->board[5] = 'r';
+    }
+    if (piece == 'k' && index[0] == 4 && index[1] == 2) {
+        pos->board[0] = '.';
+        pos->board[3] = 'r';
+    }
 
-    if (index[0] == 56) moved[0] = 1;
-    if (index[0] == 63) moved[1] = 1;
-    if (index[0] == 60) moved[2] = 1;
-    if (index[0] == 0) moved[3] = 1;
-    if (index[0] == 4) moved[4] = 1;
-    if (index[0] == 7) moved[5] = 1;
+    if (index[0] == 56 || index[1] == 56) pos->moved[0] = 1;
+    if (index[0] == 63 || index[1] == 63) pos->moved[1] = 1;
+    if (index[0] == 60 || index[1] == 60) pos->moved[2] = 1;
+    if (index[0] == 0 || index[1] == 0) pos->moved[3] = 1;
+    if (index[0] == 4 || index[1] == 4) pos->moved[4] = 1;
+    if (index[0] == 7 || index[1] == 7) pos->moved[5] = 1;
 
-    board[index[0]] = '.';
-    board[index[1]] = piece;
+    pos->board[index[0]] = '.';
+    pos->board[index[1]] = piece;
+
+    // forvandling: femte tegn i trekket velger brikke (e7e8n),
+    // dronning hvis ingenting er oppgitt
+    if ((piece == 'P' && index[1] <= 7) || (piece == 'p' && index[1] >= 56))
+    {
+        char promo = tolower(move[4]);
+        if (promo != 'q' && promo != 'r' && promo != 'b' && promo != 'n') promo = 'q';
+        pos->board[index[1]] = isupper(piece) ? toupper(promo) : promo;
+    }
 }
 
-int castle_rights(char board[], int king_index, int rook_index)
+int castle_rights(const Position *pos, int king_index, int rook_index)
 {
     int king_flag = -1;
     int rook_flag = -1;
@@ -181,126 +198,186 @@ int castle_rights(char board[], int king_index, int rook_index)
     if (rook_index == 0)  rook_flag = 3;
     if (rook_index == 7)  rook_flag = 5;
 
-    if (moved[king_flag] == 1) return 1;
-    if (moved[rook_flag] == 1) return 1;
+    if (pos->moved[king_flag] == 1) return 1;
+    if (pos->moved[rook_flag] == 1) return 1;
     return 0;
 }
 
-void pawn_move(int color, char board[], int indexes[], int *idx, int legalmoves_out[])
+void pawn_move(const Position *pos, int color, int indexes[], int *idx, int legalmoves_out[])
 {
     if (color == -1) {
-                if (48 <= indexes[0] && indexes[0] <= 55 && board[indexes[0] - 8] == '.' && board[indexes[0] - 16] == '.') 
-                {
-                    legalmoves_out[(*idx)++] = indexes[0] - 8;
-                    legalmoves_out[(*idx)++] = indexes[0] - 16;
-                } 
-                else 
-                {
-                    if (indexes[0] - 8 >= 0 && board[indexes[0] - 8] == '.')
-                    {
-                    legalmoves_out[(*idx)++] = indexes[0] - 8;
-                    }
-                }
-                if (indexes[0] - 7 >= 0 && indexes[0] % 8 != 7 && is_enemy(board[indexes[0] - 7], color))
-                {
-                    legalmoves_out[(*idx)++] = indexes[0] - 7;
-                }
-                if (indexes[0] - 9 >= 0 && indexes[0] % 8 != 0 && is_enemy(board[indexes[0] - 9], color))
-                {
-                    legalmoves_out[(*idx)++] = indexes[0] - 9;
-                }
-                if (indexes[0] - 1 >= 0 && indexes[0] % 8 != 0 && indexes[0] - 1 == en_passant_move[1] && is_enemy(board[indexes[0] - 1], color) && en_passant(board, indexes))
-                {
-                    legalmoves_out[(*idx)++] = indexes[0] - 9;
-                }
-                if (indexes[0] + 1 <= 63 && indexes[0] % 8 != 7 && indexes[0] + 1 == en_passant_move[1] && is_enemy(board[indexes[0] + 1], color) && en_passant(board, indexes))
-                {
-                    legalmoves_out[(*idx)++] = indexes[0] - 7;
-                }
-
-
-            }
-            
-            else 
+        if (48 <= indexes[0] && indexes[0] <= 55
+            && pos->board[indexes[0] - 8] == '.' && pos->board[indexes[0] - 16] == '.')
+        {
+            legalmoves_out[(*idx)++] = indexes[0] - 8;
+            legalmoves_out[(*idx)++] = indexes[0] - 16;
+        }
+        else
+        {
+            if (indexes[0] - 8 >= 0 && pos->board[indexes[0] - 8] == '.')
             {
-                if (8 <= indexes[0] && indexes[0] <= 15 && board[indexes[0] + 8] == '.' && board[indexes[0] + 16] == '.') 
-                {
-                    legalmoves_out[(*idx)++] = indexes[0] + 8;
-                    legalmoves_out[(*idx)++] = indexes[0] + 16;
-                } else 
-                {
-                    if (indexes[0] + 8 <= 63 && board[indexes[0] + 8] == '.')
-                    {
-                    legalmoves_out[(*idx)++] = indexes[0] + 8;
-                    }
-                }
-                if (indexes[0] + 7 <= 63 && indexes[0] % 8 != 0 && is_enemy(board[indexes[0] + 7], color))
-                {
-                    legalmoves_out[(*idx)++] = indexes[0] + 7;
-                }
-                if (indexes[0] + 9 <= 63 && indexes[0] % 8 != 7 && is_enemy(board[indexes[0] + 9], color))
-                {
-                    legalmoves_out[(*idx)++] = indexes[0] + 9;
-                }
-                if (indexes[0] - 1 >= 0 && indexes[0] % 8 != 0 && indexes[0] - 1 == en_passant_move[1] && is_enemy(board[indexes[0] - 1], color) && en_passant(board, indexes))
-                {
-                    legalmoves_out[(*idx)++] = indexes[0] + 7;
-                }
-                if (indexes[0] + 1 <= 63 && indexes[0] % 8 != 7 && indexes[0] + 1 == en_passant_move[1] && is_enemy(board[indexes[0] + 1], color) && en_passant(board, indexes))
-                {
-                    legalmoves_out[(*idx)++] = indexes[0] + 9;
-                }
-
-
+                legalmoves_out[(*idx)++] = indexes[0] - 8;
             }
+        }
+        if (indexes[0] - 7 >= 0 && indexes[0] % 8 != 7
+            && is_enemy(pos->board[indexes[0] - 7], color))
+        {
+            legalmoves_out[(*idx)++] = indexes[0] - 7;
+        }
+        if (indexes[0] - 9 >= 0 && indexes[0] % 8 != 0
+            && is_enemy(pos->board[indexes[0] - 9], color))
+        {
+            legalmoves_out[(*idx)++] = indexes[0] - 9;
+        }
+        if (indexes[0] - 1 >= 0 && indexes[0] % 8 != 0 && indexes[0] - 1 == pos->en_passant[1]
+            && is_enemy(pos->board[indexes[0] - 1], color) && en_passant(pos, indexes))
+        {
+            legalmoves_out[(*idx)++] = indexes[0] - 9;
+        }
+        if (indexes[0] + 1 <= 63 && indexes[0] % 8 != 7 && indexes[0] + 1 == pos->en_passant[1]
+            && is_enemy(pos->board[indexes[0] + 1], color) && en_passant(pos, indexes))
+        {
+            legalmoves_out[(*idx)++] = indexes[0] - 7;
+        }
+    }
+    else
+    {
+        if (8 <= indexes[0] && indexes[0] <= 15
+            && pos->board[indexes[0] + 8] == '.' && pos->board[indexes[0] + 16] == '.')
+        {
+            legalmoves_out[(*idx)++] = indexes[0] + 8;
+            legalmoves_out[(*idx)++] = indexes[0] + 16;
+        }
+        else
+        {
+            if (indexes[0] + 8 <= 63 && pos->board[indexes[0] + 8] == '.')
+            {
+                legalmoves_out[(*idx)++] = indexes[0] + 8;
+            }
+        }
+        if (indexes[0] + 7 <= 63 && indexes[0] % 8 != 0
+            && is_enemy(pos->board[indexes[0] + 7], color))
+        {
+            legalmoves_out[(*idx)++] = indexes[0] + 7;
+        }
+        if (indexes[0] + 9 <= 63 && indexes[0] % 8 != 7
+            && is_enemy(pos->board[indexes[0] + 9], color))
+        {
+            legalmoves_out[(*idx)++] = indexes[0] + 9;
+        }
+        if (indexes[0] - 1 >= 0 && indexes[0] % 8 != 0 && indexes[0] - 1 == pos->en_passant[1]
+            && is_enemy(pos->board[indexes[0] - 1], color) && en_passant(pos, indexes))
+        {
+            legalmoves_out[(*idx)++] = indexes[0] + 7;
+        }
+        if (indexes[0] + 1 <= 63 && indexes[0] % 8 != 7 && indexes[0] + 1 == pos->en_passant[1]
+            && is_enemy(pos->board[indexes[0] + 1], color) && en_passant(pos, indexes))
+        {
+            legalmoves_out[(*idx)++] = indexes[0] + 9;
+        }
+    }
 }
 
-void knight_move(int color, char board[], int indexes[], int *idx, int legalmoves_out[])
+void knight_move(const Position *pos, int color, int indexes[], int *idx, int legalmoves_out[])
 {
-    if (indexes[0] - 17 >= 0 && indexes[0] % 8 != 0 && board[indexes[0] - 17] == '.') legalmoves_out[(*idx)++] = indexes[0] - 17;
-            if (indexes[0] - 17 >= 0 && indexes[0] % 8 != 0) {if (is_enemy(board[indexes[0] - 17], color)) {legalmoves_out[(*idx)++] = indexes[0] - 17;}}
+    if (indexes[0] - 17 >= 0 && indexes[0] % 8 != 0 && pos->board[indexes[0] - 17] == '.')
+        legalmoves_out[(*idx)++] = indexes[0] - 17;
+    if (indexes[0] - 17 >= 0 && indexes[0] % 8 != 0) {
+        if (is_enemy(pos->board[indexes[0] - 17], color)) {
+            legalmoves_out[(*idx)++] = indexes[0] - 17;
+        }
+    }
 
-            if (indexes[0] - 15 >= 0 && indexes[0] % 8 != 7 && board[indexes[0] - 15] == '.') legalmoves_out[(*idx)++] = indexes[0] - 15;
-            if (indexes[0] - 15 >= 0 && indexes[0] % 8 != 7) {if (is_enemy(board[indexes[0] - 15], color)) {legalmoves_out[(*idx)++] = indexes[0] - 15;}}
+    if (indexes[0] - 15 >= 0 && indexes[0] % 8 != 7 && pos->board[indexes[0] - 15] == '.')
+        legalmoves_out[(*idx)++] = indexes[0] - 15;
+    if (indexes[0] - 15 >= 0 && indexes[0] % 8 != 7) {
+        if (is_enemy(pos->board[indexes[0] - 15], color)) {
+            legalmoves_out[(*idx)++] = indexes[0] - 15;
+        }
+    }
 
-            if (indexes[0] + 17 <= 63 && indexes[0] % 8 != 7 && board[indexes[0] + 17] == '.') legalmoves_out[(*idx)++] = indexes[0] + 17;
-            if (indexes[0] + 17 <= 63 && indexes[0] % 8 != 7) {if (is_enemy(board[indexes[0] + 17], color)) {legalmoves_out[(*idx)++] = indexes[0] + 17;}}
+    if (indexes[0] + 17 <= 63 && indexes[0] % 8 != 7 && pos->board[indexes[0] + 17] == '.')
+        legalmoves_out[(*idx)++] = indexes[0] + 17;
+    if (indexes[0] + 17 <= 63 && indexes[0] % 8 != 7) {
+        if (is_enemy(pos->board[indexes[0] + 17], color)) {
+            legalmoves_out[(*idx)++] = indexes[0] + 17;
+        }
+    }
 
-            if (indexes[0] + 15 <= 63 && indexes[0] % 8 != 0 && board[indexes[0] + 15] == '.') legalmoves_out[(*idx)++] = indexes[0] + 15;
-            if (indexes[0] + 15 <= 63 && indexes[0] % 8 != 0) {if (is_enemy(board[indexes[0] + 15], color)) {legalmoves_out[(*idx)++] = indexes[0] + 15;}}
+    if (indexes[0] + 15 <= 63 && indexes[0] % 8 != 0 && pos->board[indexes[0] + 15] == '.')
+        legalmoves_out[(*idx)++] = indexes[0] + 15;
+    if (indexes[0] + 15 <= 63 && indexes[0] % 8 != 0) {
+        if (is_enemy(pos->board[indexes[0] + 15], color)) {
+            legalmoves_out[(*idx)++] = indexes[0] + 15;
+        }
+    }
 
+    if (indexes[0] - 10 >= 0 && indexes[0] % 8 >= 2 && pos->board[indexes[0] - 10] == '.')
+        legalmoves_out[(*idx)++] = indexes[0] - 10;
+    if (indexes[0] - 10 >= 0 && indexes[0] % 8 >= 2) {
+        if (is_enemy(pos->board[indexes[0] - 10], color)) {
+            legalmoves_out[(*idx)++] = indexes[0] - 10;
+        }
+    }
 
-            if (indexes[0] - 10 >= 0 && indexes[0] % 8 >= 2 && board[indexes[0] - 10] == '.') legalmoves_out[(*idx)++] = indexes[0] - 10;
-            if (indexes[0] - 10 >= 0 && indexes[0] % 8 >= 2) {if (is_enemy(board[indexes[0] - 10], color)) {legalmoves_out[(*idx)++] = indexes[0] - 10;}}
+    if (indexes[0] + 6 <= 63 && indexes[0] % 8 >= 2 && pos->board[indexes[0] + 6] == '.')
+        legalmoves_out[(*idx)++] = indexes[0] + 6;
+    if (indexes[0] + 6 <= 63 && indexes[0] % 8 >= 2) {
+        if (is_enemy(pos->board[indexes[0] + 6], color)) {
+            legalmoves_out[(*idx)++] = indexes[0] + 6;
+        }
+    }
 
-            if (indexes[0] + 6 <= 63 && indexes[0] % 8 >= 2 && board[indexes[0] + 6] == '.') legalmoves_out[(*idx)++] = indexes[0] + 6;
-            if (indexes[0] + 6 <= 63 && indexes[0] % 8 >= 2) {if (is_enemy(board[indexes[0] + 6], color)) {legalmoves_out[(*idx)++] = indexes[0] + 6;}}
+    if (indexes[0] + 10 <= 63 && indexes[0] % 8 <= 5 && pos->board[indexes[0] + 10] == '.')
+        legalmoves_out[(*idx)++] = indexes[0] + 10;
+    if (indexes[0] + 10 <= 63 && indexes[0] % 8 <= 5) {
+        if (is_enemy(pos->board[indexes[0] + 10], color)) {
+            legalmoves_out[(*idx)++] = indexes[0] + 10;
+        }
+    }
 
-            if (indexes[0] + 10 <= 63 && indexes[0] % 8 <= 5 && board[indexes[0] + 10] == '.') legalmoves_out[(*idx)++] = indexes[0] + 10;
-            if (indexes[0] + 10 <= 63 && indexes[0] % 8 <= 5) {if (is_enemy(board[indexes[0] + 10], color)) {legalmoves_out[(*idx)++] = indexes[0] + 10;}}
-
-            if (indexes[0] - 6 >= 0 && indexes[0] % 8 <= 5 && board[indexes[0] - 6] == '.') legalmoves_out[(*idx)++] = indexes[0] - 6;
-            if (indexes[0] - 6 >= 0 && indexes[0] % 8 <= 5) {if (is_enemy(board[indexes[0] - 6], color)) {legalmoves_out[(*idx)++] = indexes[0] - 6;}}
-
-
+    if (indexes[0] - 6 >= 0 && indexes[0] % 8 <= 5 && pos->board[indexes[0] - 6] == '.')
+        legalmoves_out[(*idx)++] = indexes[0] - 6;
+    if (indexes[0] - 6 >= 0 && indexes[0] % 8 <= 5) {
+        if (is_enemy(pos->board[indexes[0] - 6], color)) {
+            legalmoves_out[(*idx)++] = indexes[0] - 6;
+        }
+    }
 }
 
-void rook_move(int color, char board[], int indexes[], int *idx, int legalmoves_out[])
+void rook_move(const Position *pos, int color, int indexes[], int *idx, int legalmoves_out[])
 {
     int uprank, downrank, rightrank, leftrank;
     int filecount = indexes[0] % 8;
 
-    for (uprank = 0; indexes[0] - 8 * (uprank + 1) >= 0 && board[indexes[0] - 8 * (uprank + 1)] == '.'; uprank++) {}
-    if (indexes[0] - 8 * (uprank + 1) >= 0) {if (is_enemy(board[indexes[0] - 8 * (uprank + 1)], color)) {uprank++;}}
+    for (uprank = 0;
+         indexes[0] - 8 * (uprank + 1) >= 0 && pos->board[indexes[0] - 8 * (uprank + 1)] == '.';
+         uprank++) {}
+    if (indexes[0] - 8 * (uprank + 1) >= 0) {
+        if (is_enemy(pos->board[indexes[0] - 8 * (uprank + 1)], color)) {uprank++;}
+    }
 
-    for (downrank = 0; indexes[0] + 8 * (downrank + 1) <= 63 && board[indexes[0] + 8 * (downrank + 1)] == '.'; downrank++) {}
-    if (indexes[0] + 8 * (downrank + 1) <= 63) {if (is_enemy(board[indexes[0] + 8 * (downrank + 1)], color)) {downrank++;}}
+    for (downrank = 0;
+         indexes[0] + 8 * (downrank + 1) <= 63
+         && pos->board[indexes[0] + 8 * (downrank + 1)] == '.';
+         downrank++) {}
+    if (indexes[0] + 8 * (downrank + 1) <= 63) {
+        if (is_enemy(pos->board[indexes[0] + 8 * (downrank + 1)], color)) {downrank++;}
+    }
 
-    for (rightrank = 0; (filecount + rightrank + 1) <= 7 && board[indexes[0] + (rightrank + 1)] == '.'; rightrank++) {}
-    if ((filecount + rightrank + 1) <= 7) {if (is_enemy(board[(indexes[0] + rightrank + 1)], color)) {rightrank++;}}
+    for (rightrank = 0;
+         (filecount + rightrank + 1) <= 7 && pos->board[indexes[0] + (rightrank + 1)] == '.';
+         rightrank++) {}
+    if ((filecount + rightrank + 1) <= 7) {
+        if (is_enemy(pos->board[(indexes[0] + rightrank + 1)], color)) {rightrank++;}
+    }
 
-    for (leftrank = 0; (filecount - leftrank - 1) >= 0 && board[indexes[0] - (leftrank + 1)] == '.'; leftrank++) {}
-    if ((filecount - leftrank - 1) >= 0) {if (is_enemy(board[indexes[0] - (leftrank + 1)], color)) {leftrank++;}}
+    for (leftrank = 0;
+         (filecount - leftrank - 1) >= 0 && pos->board[indexes[0] - (leftrank + 1)] == '.';
+         leftrank++) {}
+    if ((filecount - leftrank - 1) >= 0) {
+        if (is_enemy(pos->board[indexes[0] - (leftrank + 1)], color)) {leftrank++;}
+    }
 
     for (int i = 0; i < uprank; i++)    legalmoves_out[(*idx)++] = indexes[0] - 8 * (i + 1);
     for (int i = 0; i < downrank; i++)  legalmoves_out[(*idx)++] = indexes[0] + 8 * (i + 1);
@@ -308,81 +385,154 @@ void rook_move(int color, char board[], int indexes[], int *idx, int legalmoves_
     for (int i = 0; i < leftrank; i++)  legalmoves_out[(*idx)++] = indexes[0] - (i + 1);
 }
 
-void bishop_move(int color, char board[], int indexes[], int *idx, int legalmoves_out[])
+void bishop_move(const Position *pos, int color, int indexes[], int *idx, int legalmoves_out[])
 {
-            int nw, ne, se, sw;
+    int nw, ne, se, sw;
 
-            for (nw = 0; indexes[0] - 9 * (nw + 1) >= 0 && (indexes[0] - 9 * nw) % 8 != 0 && board[indexes[0] - 9 * (nw + 1)] == '.'; nw++) {}
-            if (indexes[0] - 9 * (nw + 1) >= 0 && (indexes[0] - 9 * nw) % 8 != 0) {if (is_enemy(board[indexes[0] - 9 * (nw + 1)], color)) {nw++;}}
+    for (nw = 0;
+         indexes[0] - 9 * (nw + 1) >= 0 && (indexes[0] - 9 * nw) % 8 != 0
+         && pos->board[indexes[0] - 9 * (nw + 1)] == '.';
+         nw++) {}
+    if (indexes[0] - 9 * (nw + 1) >= 0 && (indexes[0] - 9 * nw) % 8 != 0) {
+        if (is_enemy(pos->board[indexes[0] - 9 * (nw + 1)], color)) {nw++;}
+    }
 
-            for (ne = 0; indexes[0] - 7 * (ne + 1) >= 0 && (indexes[0] - 7 * ne) % 8 != 7 && board[indexes[0] - 7 * (ne + 1)] == '.'; ne++) {}
-            if (indexes[0] - 7 * (ne + 1) >= 0 && (indexes[0] - 7 * ne) % 8 != 7) {if (is_enemy(board[indexes[0] - 7 * (ne + 1)], color)) {ne++;}}
+    for (ne = 0;
+         indexes[0] - 7 * (ne + 1) >= 0 && (indexes[0] - 7 * ne) % 8 != 7
+         && pos->board[indexes[0] - 7 * (ne + 1)] == '.';
+         ne++) {}
+    if (indexes[0] - 7 * (ne + 1) >= 0 && (indexes[0] - 7 * ne) % 8 != 7) {
+        if (is_enemy(pos->board[indexes[0] - 7 * (ne + 1)], color)) {ne++;}
+    }
 
-            for (se = 0; indexes[0] + 9 * (se + 1) <= 63 && (indexes[0] + 9 * se) % 8 != 7 && board[indexes[0] + 9 * (se + 1)] == '.'; se++) {}
-            if (indexes[0] + 9 * (se + 1) <= 63 && (indexes[0] + 9 * se) % 8 != 7) {if (is_enemy(board[indexes[0] + 9 * (se + 1)], color)) {se++;}}
+    for (se = 0;
+         indexes[0] + 9 * (se + 1) <= 63 && (indexes[0] + 9 * se) % 8 != 7
+         && pos->board[indexes[0] + 9 * (se + 1)] == '.';
+         se++) {}
+    if (indexes[0] + 9 * (se + 1) <= 63 && (indexes[0] + 9 * se) % 8 != 7) {
+        if (is_enemy(pos->board[indexes[0] + 9 * (se + 1)], color)) {se++;}
+    }
 
-            for (sw = 0; indexes[0] + 7 * (sw + 1) <= 63 && (indexes[0] + 7 * sw) % 8 != 0 && board[indexes[0] + 7 * (sw + 1)] == '.'; sw++) {}
-            if (indexes[0] + 7 * (sw + 1) <= 63 && (indexes[0] + 7 * sw) % 8 != 0) {if (is_enemy(board[indexes[0] + 7 * (sw + 1)], color)) {sw++;}}
+    for (sw = 0;
+         indexes[0] + 7 * (sw + 1) <= 63 && (indexes[0] + 7 * sw) % 8 != 0
+         && pos->board[indexes[0] + 7 * (sw + 1)] == '.';
+         sw++) {}
+    if (indexes[0] + 7 * (sw + 1) <= 63 && (indexes[0] + 7 * sw) % 8 != 0) {
+        if (is_enemy(pos->board[indexes[0] + 7 * (sw + 1)], color)) {sw++;}
+    }
 
-            for (int i = 0; i < nw; i++) legalmoves_out[(*idx)++] = indexes[0] - 9 * (i + 1);
-            for (int i = 0; i < ne; i++) legalmoves_out[(*idx)++] = indexes[0] - 7 * (i + 1);
-            for (int i = 0; i < se; i++) legalmoves_out[(*idx)++] = indexes[0] + 9 * (i + 1);
-            for (int i = 0; i < sw; i++) legalmoves_out[(*idx)++] = indexes[0] + 7 * (i + 1);
+    for (int i = 0; i < nw; i++) legalmoves_out[(*idx)++] = indexes[0] - 9 * (i + 1);
+    for (int i = 0; i < ne; i++) legalmoves_out[(*idx)++] = indexes[0] - 7 * (i + 1);
+    for (int i = 0; i < se; i++) legalmoves_out[(*idx)++] = indexes[0] + 9 * (i + 1);
+    for (int i = 0; i < sw; i++) legalmoves_out[(*idx)++] = indexes[0] + 7 * (i + 1);
 }
 
-void queen_move(int color, char board[], int indexes[], int *idx, int legalmoves_out[])
+void queen_move(const Position *pos, int color, int indexes[], int *idx, int legalmoves_out[])
 {
-            int nw, ne, se, sw;
-            int uprank, downrank, rightrank, leftrank;
-            int filecount = indexes[0] % 8;
+    int nw, ne, se, sw;
+    int uprank, downrank, rightrank, leftrank;
+    int filecount = indexes[0] % 8;
 
-            for (nw = 0; indexes[0] - 9 * (nw + 1) >= 0 && (indexes[0] - 9 * nw) % 8 != 0 && board[indexes[0] - 9 * (nw + 1)] == '.'; nw++) {}
-            if (indexes[0] - 9 * (nw + 1) >= 0 && (indexes[0] - 9 * nw) % 8 != 0) {if (is_enemy(board[indexes[0] - 9 * (nw + 1)], color)) {nw++;}}
+    for (nw = 0;
+         indexes[0] - 9 * (nw + 1) >= 0 && (indexes[0] - 9 * nw) % 8 != 0
+         && pos->board[indexes[0] - 9 * (nw + 1)] == '.';
+         nw++) {}
+    if (indexes[0] - 9 * (nw + 1) >= 0 && (indexes[0] - 9 * nw) % 8 != 0) {
+        if (is_enemy(pos->board[indexes[0] - 9 * (nw + 1)], color)) {nw++;}
+    }
 
-            for (ne = 0; indexes[0] - 7 * (ne + 1) >= 0 && (indexes[0] - 7 * ne) % 8 != 7 && board[indexes[0] - 7 * (ne + 1)] == '.'; ne++) {}
-            if (indexes[0] - 7 * (ne + 1) >= 0 && (indexes[0] - 7 * ne) % 8 != 7) {if (is_enemy(board[indexes[0] - 7 * (ne + 1)], color)) {ne++;}}
+    for (ne = 0;
+         indexes[0] - 7 * (ne + 1) >= 0 && (indexes[0] - 7 * ne) % 8 != 7
+         && pos->board[indexes[0] - 7 * (ne + 1)] == '.';
+         ne++) {}
+    if (indexes[0] - 7 * (ne + 1) >= 0 && (indexes[0] - 7 * ne) % 8 != 7) {
+        if (is_enemy(pos->board[indexes[0] - 7 * (ne + 1)], color)) {ne++;}
+    }
 
-            for (se = 0; indexes[0] + 9 * (se + 1) <= 63 && (indexes[0] + 9 * se) % 8 != 7 && board[indexes[0] + 9 * (se + 1)] == '.'; se++) {}
-            if (indexes[0] + 9 * (se + 1) <= 63 && (indexes[0] + 9 * se) % 8 != 7) {if (is_enemy(board[indexes[0] + 9 * (se + 1)], color)) {se++;}}
+    for (se = 0;
+         indexes[0] + 9 * (se + 1) <= 63 && (indexes[0] + 9 * se) % 8 != 7
+         && pos->board[indexes[0] + 9 * (se + 1)] == '.';
+         se++) {}
+    if (indexes[0] + 9 * (se + 1) <= 63 && (indexes[0] + 9 * se) % 8 != 7) {
+        if (is_enemy(pos->board[indexes[0] + 9 * (se + 1)], color)) {se++;}
+    }
 
-            for (sw = 0; indexes[0] + 7 * (sw + 1) <= 63 && (indexes[0] + 7 * sw) % 8 != 0 && board[indexes[0] + 7 * (sw + 1)] == '.'; sw++) {}
-            if (indexes[0] + 7 * (sw + 1) <= 63 && (indexes[0] + 7 * sw) % 8 != 0) {if (is_enemy(board[indexes[0] + 7 * (sw + 1)], color)) {sw++;}}
+    for (sw = 0;
+         indexes[0] + 7 * (sw + 1) <= 63 && (indexes[0] + 7 * sw) % 8 != 0
+         && pos->board[indexes[0] + 7 * (sw + 1)] == '.';
+         sw++) {}
+    if (indexes[0] + 7 * (sw + 1) <= 63 && (indexes[0] + 7 * sw) % 8 != 0) {
+        if (is_enemy(pos->board[indexes[0] + 7 * (sw + 1)], color)) {sw++;}
+    }
 
-            for (uprank = 0; indexes[0] - 8 * (uprank + 1) >= 0 && board[indexes[0] - 8 * (uprank + 1)] == '.'; uprank++) {}
-            if (indexes[0] - 8 * (uprank + 1) >= 0) {if (is_enemy(board[indexes[0] - 8 * (uprank + 1)], color)) {uprank++;}}
+    for (uprank = 0;
+         indexes[0] - 8 * (uprank + 1) >= 0 && pos->board[indexes[0] - 8 * (uprank + 1)] == '.';
+         uprank++) {}
+    if (indexes[0] - 8 * (uprank + 1) >= 0) {
+        if (is_enemy(pos->board[indexes[0] - 8 * (uprank + 1)], color)) {uprank++;}
+    }
 
-            for (downrank = 0; indexes[0] + 8 * (downrank + 1) <= 63 && board[indexes[0] + 8 * (downrank + 1)] == '.'; downrank++) {}
-            if (indexes[0] + 8 * (downrank + 1) <= 63) {if (is_enemy(board[indexes[0] + 8 * (downrank + 1)], color)) {downrank++;}}
+    for (downrank = 0;
+         indexes[0] + 8 * (downrank + 1) <= 63
+         && pos->board[indexes[0] + 8 * (downrank + 1)] == '.';
+         downrank++) {}
+    if (indexes[0] + 8 * (downrank + 1) <= 63) {
+        if (is_enemy(pos->board[indexes[0] + 8 * (downrank + 1)], color)) {downrank++;}
+    }
 
-            for (rightrank = 0; (filecount + rightrank + 1) <= 7 && board[indexes[0] + (rightrank + 1)] == '.'; rightrank++) {}
-            if ((filecount + rightrank + 1) <= 7) {if (is_enemy(board[(indexes[0] + rightrank + 1)], color)) {rightrank++;}}
+    for (rightrank = 0;
+         (filecount + rightrank + 1) <= 7 && pos->board[indexes[0] + (rightrank + 1)] == '.';
+         rightrank++) {}
+    if ((filecount + rightrank + 1) <= 7) {
+        if (is_enemy(pos->board[(indexes[0] + rightrank + 1)], color)) {rightrank++;}
+    }
 
-            for (leftrank = 0; (filecount - leftrank - 1) >= 0 && board[indexes[0] - (leftrank + 1)] == '.'; leftrank++) {}
-            if ((filecount - leftrank - 1) >= 0) {if (is_enemy(board[indexes[0] - (leftrank + 1)], color)) {leftrank++;}}
+    for (leftrank = 0;
+         (filecount - leftrank - 1) >= 0 && pos->board[indexes[0] - (leftrank + 1)] == '.';
+         leftrank++) {}
+    if ((filecount - leftrank - 1) >= 0) {
+        if (is_enemy(pos->board[indexes[0] - (leftrank + 1)], color)) {leftrank++;}
+    }
 
-            for (int i = 0; i < uprank; i++)    legalmoves_out[(*idx)++] = indexes[0] - 8 * (i + 1);
-            for (int i = 0; i < downrank; i++)  legalmoves_out[(*idx)++] = indexes[0] + 8 * (i + 1);
-            for (int i = 0; i < rightrank; i++) legalmoves_out[(*idx)++] = indexes[0] + (i + 1);
-            for (int i = 0; i < leftrank; i++)  legalmoves_out[(*idx)++] = indexes[0] - (i + 1);
-            for (int i = 0; i < nw; i++)        legalmoves_out[(*idx)++] = indexes[0] - 9 * (i + 1);
-            for (int i = 0; i < ne; i++)        legalmoves_out[(*idx)++] = indexes[0] - 7 * (i + 1);
-            for (int i = 0; i < se; i++)        legalmoves_out[(*idx)++] = indexes[0] + 9 * (i + 1);
-            for (int i = 0; i < sw; i++)        legalmoves_out[(*idx)++] = indexes[0] + 7 * (i + 1);
+    for (int i = 0; i < uprank; i++)    legalmoves_out[(*idx)++] = indexes[0] - 8 * (i + 1);
+    for (int i = 0; i < downrank; i++)  legalmoves_out[(*idx)++] = indexes[0] + 8 * (i + 1);
+    for (int i = 0; i < rightrank; i++) legalmoves_out[(*idx)++] = indexes[0] + (i + 1);
+    for (int i = 0; i < leftrank; i++)  legalmoves_out[(*idx)++] = indexes[0] - (i + 1);
+    for (int i = 0; i < nw; i++)        legalmoves_out[(*idx)++] = indexes[0] - 9 * (i + 1);
+    for (int i = 0; i < ne; i++)        legalmoves_out[(*idx)++] = indexes[0] - 7 * (i + 1);
+    for (int i = 0; i < se; i++)        legalmoves_out[(*idx)++] = indexes[0] + 9 * (i + 1);
+    for (int i = 0; i < sw; i++)        legalmoves_out[(*idx)++] = indexes[0] + 7 * (i + 1);
 }
 
-void king_move(int color, char board[], int indexes[], int *idx, int legalmoves_out[])
+void king_move(const Position *pos, int color, int indexes[], int *idx, int legalmoves_out[])
 {
-            if (indexes[0] - 9 >= 0 && indexes[0] % 8 != 0 && (board[indexes[0] - 9] == '.' || is_enemy(board[indexes[0] - 9], color))) legalmoves_out[(*idx)++] = indexes[0] - 9;
-            if (indexes[0] - 8 >= 0 && (board[indexes[0] - 8] == '.' || is_enemy(board[indexes[0] - 8], color))) legalmoves_out[(*idx)++] = indexes[0] - 8;
-            if (indexes[0] - 7 >= 0 && indexes[0] % 8 != 7 && (board[indexes[0] - 7] == '.' || is_enemy(board[indexes[0] - 7], color))) legalmoves_out[(*idx)++] = indexes[0] - 7;
-            if (indexes[0] - 1 >= 0 && indexes[0] % 8 != 0 && (board[indexes[0] - 1] == '.' || is_enemy(board[indexes[0] - 1], color))) legalmoves_out[(*idx)++] = indexes[0] - 1;
-            if (indexes[0] + 1 <= 63 && indexes[0] % 8 != 7 && (board[indexes[0] + 1] == '.' || is_enemy(board[indexes[0] + 1], color))) legalmoves_out[(*idx)++] = indexes[0] + 1;
-            if (indexes[0] + 7 <= 63 && indexes[0] % 8 != 0 && (board[indexes[0] + 7] == '.' || is_enemy(board[indexes[0] + 7], color))) legalmoves_out[(*idx)++] = indexes[0] + 7;
-            if (indexes[0] + 8 <= 63 && (board[indexes[0] + 8] == '.' || is_enemy(board[indexes[0] + 8], color))) legalmoves_out[(*idx)++] = indexes[0] + 8;
-            if (indexes[0] + 9 <= 63 && indexes[0] % 8 != 7 && (board[indexes[0] + 9] == '.' || is_enemy(board[indexes[0] + 9], color))) legalmoves_out[(*idx)++] = indexes[0] + 9;
+    if (indexes[0] - 9 >= 0 && indexes[0] % 8 != 0
+        && (pos->board[indexes[0] - 9] == '.' || is_enemy(pos->board[indexes[0] - 9], color)))
+        legalmoves_out[(*idx)++] = indexes[0] - 9;
+    if (indexes[0] - 8 >= 0
+        && (pos->board[indexes[0] - 8] == '.' || is_enemy(pos->board[indexes[0] - 8], color)))
+        legalmoves_out[(*idx)++] = indexes[0] - 8;
+    if (indexes[0] - 7 >= 0 && indexes[0] % 8 != 7
+        && (pos->board[indexes[0] - 7] == '.' || is_enemy(pos->board[indexes[0] - 7], color)))
+        legalmoves_out[(*idx)++] = indexes[0] - 7;
+    if (indexes[0] - 1 >= 0 && indexes[0] % 8 != 0
+        && (pos->board[indexes[0] - 1] == '.' || is_enemy(pos->board[indexes[0] - 1], color)))
+        legalmoves_out[(*idx)++] = indexes[0] - 1;
+    if (indexes[0] + 1 <= 63 && indexes[0] % 8 != 7
+        && (pos->board[indexes[0] + 1] == '.' || is_enemy(pos->board[indexes[0] + 1], color)))
+        legalmoves_out[(*idx)++] = indexes[0] + 1;
+    if (indexes[0] + 7 <= 63 && indexes[0] % 8 != 0
+        && (pos->board[indexes[0] + 7] == '.' || is_enemy(pos->board[indexes[0] + 7], color)))
+        legalmoves_out[(*idx)++] = indexes[0] + 7;
+    if (indexes[0] + 8 <= 63
+        && (pos->board[indexes[0] + 8] == '.' || is_enemy(pos->board[indexes[0] + 8], color)))
+        legalmoves_out[(*idx)++] = indexes[0] + 8;
+    if (indexes[0] + 9 <= 63 && indexes[0] % 8 != 7
+        && (pos->board[indexes[0] + 9] == '.' || is_enemy(pos->board[indexes[0] + 9], color)))
+        legalmoves_out[(*idx)++] = indexes[0] + 9;
 }
 
-int check_check(char board[], int king_color)
+int check_check(const Position *pos, int king_color)
 {
     int legalmoves_out[192];
     int idx = 0;
@@ -392,65 +542,54 @@ int check_check(char board[], int king_color)
     } else {
         enemy_color = -1;
     }
-        for (int i = 0; i < 64; i++)
-        {
-            char piece = board[i];
-            if (piece == '.') continue;
+    for (int i = 0; i < 64; i++)
+    {
+        char piece = pos->board[i];
+        if (piece == '.') continue;
 
-            int piece_color;
-            if (isupper(piece)) piece_color = -1;
-            if (islower(piece)) piece_color = 1;
+        int piece_color;
+        if (isupper(piece)) piece_color = -1;
+        if (islower(piece)) piece_color = 1;
 
-            if (piece_color != enemy_color) continue;
+        if (piece_color != enemy_color) continue;
 
-            int indexes[2] = {i, 32};
-            if (toupper(piece) == 'P') pawn_move(enemy_color, board, indexes, &idx, legalmoves_out);
-        
-            if (toupper(piece) == 'N') knight_move(enemy_color, board, indexes, &idx, legalmoves_out);
+        int indexes[2] = {i, 32};
+        if (toupper(piece) == 'P') pawn_move(pos, enemy_color, indexes, &idx, legalmoves_out);
 
-            if (toupper(piece) == 'R') rook_move(enemy_color, board, indexes, &idx, legalmoves_out);
+        if (toupper(piece) == 'N') knight_move(pos, enemy_color, indexes, &idx, legalmoves_out);
 
-            if (toupper(piece) == 'B') bishop_move(enemy_color, board, indexes, &idx, legalmoves_out);
+        if (toupper(piece) == 'R') rook_move(pos, enemy_color, indexes, &idx, legalmoves_out);
 
-            if (toupper(piece) == 'Q') queen_move(enemy_color, board, indexes, &idx, legalmoves_out);
+        if (toupper(piece) == 'B') bishop_move(pos, enemy_color, indexes, &idx, legalmoves_out);
 
-            if (toupper(piece) == 'K') king_move(enemy_color, board, indexes, &idx, legalmoves_out);
-        }
-        char king_char;
-        if (king_color == -1) {
-            king_char = 'K';
-        } else {
-            king_char = 'k';
-        }
-        for (int k = 0; k < idx; k++) {
-            if (board[legalmoves_out[k]] == king_char) return 1;
-        }
-    
-    return 0;
-}
+        if (toupper(piece) == 'Q') queen_move(pos, enemy_color, indexes, &idx, legalmoves_out);
 
-int try_move(char board[], char move[5], int color) // sjekker om man er i sjakk etter et trekk
-{
-    char temp_board[64];
-    memcpy(temp_board, board, 64);
-    int temp_moved[6];
-    memcpy(temp_moved, moved, sizeof(moved));
-
-    move_push(temp_board, move);
-    int i_sjakk = check_check(temp_board, color);
-
-    memcpy(moved, temp_moved, sizeof(moved));
-
-    if (i_sjakk) {
-    return 1;
+        if (toupper(piece) == 'K') king_move(pos, enemy_color, indexes, &idx, legalmoves_out);
+    }
+    char king_char;
+    if (king_color == -1) {
+        king_char = 'K';
+    } else {
+        king_char = 'k';
+    }
+    for (int k = 0; k < idx; k++) {
+        if (pos->board[legalmoves_out[k]] == king_char) return 1;
     }
 
     return 0;
 }
 
-void castle(char board[], int indexes[], int legalmoves_out[], int *idx)
+// sjekker om man er i sjakk etter et trekk
+int try_move(const Position *pos, char move[5], int color)
 {
-    char piece = board[indexes[0]];
+    Position temp = *pos;
+    move_push(&temp, move);
+    return check_check(&temp, color);
+}
+
+void castle(const Position *pos, int indexes[], int legalmoves_out[], int *idx)
+{
+    char piece = pos->board[indexes[0]];
     int color;
     if (isupper(piece)) {color = -1;}
     else {color = 1;}
@@ -458,18 +597,33 @@ void castle(char board[], int indexes[], int legalmoves_out[], int *idx)
     char movemove[5];
     index_to_move(movemove, indexes);
 
-    int rook_index[2];
-    if (indexes[0] == 4 && indexes[1] == 2) {rook_index[0] = 0; rook_index[1] = 3;}
-    if (indexes[0] == 4 && indexes[1] == 6) {rook_index[0] = 7; rook_index[1] = 5;}
-    if (indexes[0] == 60 && indexes[1] == 62) {rook_index[0] = 63; rook_index[1] = 61;}
-    if (indexes[0] == 60 && indexes[1] == 58) {rook_index[0] = 56; rook_index[1] = 59;}
+    int step = (indexes[1] > indexes[0]) ? 1 : -1; // 1 = kort rokade, -1 = lang rokade
+    int rook_index = (step == 1) ? indexes[0] + 3 : indexes[0] - 4;
+    char rook = (color == -1) ? 'R' : 'r';
 
-    if (castle_rights(board, indexes[0], rook_index[0]) == 1) {return;}
-    if (try_move(board, movemove, color)) return;
+    if (pos->board[rook_index] != rook) return;
+    if (castle_rights(pos, indexes[0], rook_index) == 1) {return;}
 
-    legalmoves_out[(*idx)++] = indexes[1]; //
+    // alle ruter mellom konge og tårn må være tomme
+    for (int sq = indexes[0] + step; sq != rook_index; sq += step)
+    {
+        if (pos->board[sq] != '.') return;
+    }
+
+    // kan ikke rokere ut av sjakk eller gjennom en angrepet rute
+    if (check_check(pos, color)) return;
+    int pass[2] = {indexes[0], indexes[0] + step};
+    char pass_move[5];
+    index_to_move(pass_move, pass);
+    if (try_move(pos, pass_move, color)) return;
+
+    if (try_move(pos, movemove, color)) return;
+
+    legalmoves_out[(*idx)++] = indexes[1];
 }
-int legal(char board[], char move[]) { //Sjekker om det er en brikke der man vil flytte fra. 
+
+// Sjekker om det er en brikke der man vil flytte fra.
+int legal(const char board[], char move[]) {
     int indexes[2];
     move_to_index(move, indexes);
 
@@ -479,17 +633,18 @@ int legal(char board[], char move[]) { //Sjekker om det er en brikke der man vil
     }
 
     return 0;
-};
+}
 
-int piecemove(char board[], char move[], int legalmoves_out[], int *move_number) { // skal finne lovlige trekk for brikken
-    if (!legal(board, move)) {
+// skal finne lovlige trekk for brikken
+int piecemove(const Position *pos, char move[], int legalmoves_out[]) {
+    if (!legal(pos->board, move)) {
         printf("trekket er ulovlighehe");
         return 0;
     }
-    
+
     int indexes[2];
     move_to_index(move, indexes);
-    char piece = board[indexes[0]];
+    char piece = pos->board[indexes[0]];
 
     int color;
     int idx = 0;
@@ -500,33 +655,37 @@ int piecemove(char board[], char move[], int legalmoves_out[], int *move_number)
         color = 1;
     }
 
-    if ((*move_number % 2 == 0 && isupper(piece)) || (*move_number % 2 == 1 && islower(piece)))
+    if ((pos->move_number % 2 == 0 && isupper(piece))
+        || (pos->move_number % 2 == 1 && islower(piece)))
     {
-        if (piece == 'k' && indexes[1] == 2 && indexes[0] == 4) castle(board, indexes, legalmoves_out, &idx);
-        if (piece == 'k' && indexes[1] == 6 && indexes[0] == 4) castle(board, indexes, legalmoves_out, &idx);
-        if (piece == 'K' && indexes[1] == 58 && indexes[0] == 60) castle(board, indexes, legalmoves_out, &idx);
-        if (piece == 'K' && indexes[1] == 62 && indexes[0] == 60) castle(board, indexes, legalmoves_out, &idx);
+        if (piece == 'k' && indexes[1] == 2 && indexes[0] == 4)
+            castle(pos, indexes, legalmoves_out, &idx);
+        if (piece == 'k' && indexes[1] == 6 && indexes[0] == 4)
+            castle(pos, indexes, legalmoves_out, &idx);
+        if (piece == 'K' && indexes[1] == 58 && indexes[0] == 60)
+            castle(pos, indexes, legalmoves_out, &idx);
+        if (piece == 'K' && indexes[1] == 62 && indexes[0] == 60)
+            castle(pos, indexes, legalmoves_out, &idx);
 
-        if (toupper(piece) == 'P') pawn_move(color, board, indexes, &idx, legalmoves_out);
-            
-        if (toupper(piece) == 'N') knight_move(color, board, indexes, &idx, legalmoves_out);
+        if (toupper(piece) == 'P') pawn_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'R') rook_move(color, board, indexes, &idx, legalmoves_out);
+        if (toupper(piece) == 'N') knight_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'B') bishop_move(color, board, indexes, &idx, legalmoves_out);
+        if (toupper(piece) == 'R') rook_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'Q') queen_move(color, board, indexes, &idx, legalmoves_out);
+        if (toupper(piece) == 'B') bishop_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'K') king_move(color, board, indexes, &idx, legalmoves_out);
+        if (toupper(piece) == 'Q') queen_move(pos, color, indexes, &idx, legalmoves_out);
 
-        // tester hvert trekk brikken kan gjøre, ikke bare det som ble skrevet inn, og fjerner de som setter egen konge i sjakk
+        if (toupper(piece) == 'K') king_move(pos, color, indexes, &idx, legalmoves_out);
+
         int count = 0;
         for (int i = 0; i < idx; i++)
         {
             char test_move[5];
             int pair[2] = {indexes[0], legalmoves_out[i]};
             index_to_move(test_move, pair);
-            if (!try_move(board, test_move, color)) legalmoves_out[count++] = legalmoves_out[i];
+            if (!try_move(pos, test_move, color)) legalmoves_out[count++] = legalmoves_out[i];
         }
 
         return count;
@@ -534,14 +693,13 @@ int piecemove(char board[], char move[], int legalmoves_out[], int *move_number)
     return 0;
 }
 
-void random_move(char board[], char move[5], int *move_number)
+void random_move(const Position *pos, char move[5])
 {
-    srand(time(NULL));
     int black_pieces[20];
     int idx = 0;
     for (int i = 0; i < 64; i++)
     {
-        if (board[i] != '.' && islower(board[i]))
+        if (pos->board[i] != '.' && islower(pos->board[i]))
         {
             black_pieces[idx++] = i;
         }
@@ -558,7 +716,7 @@ void random_move(char board[], char move[5], int *move_number)
         pt = rand() % idx;
         selected_piece_index[0] = black_pieces[pt];
         index_to_move(move, selected_piece_index);
-        count = piecemove(board, move, legalmovesb, move_number);
+        count = piecemove(pos, move, legalmovesb);
     }
 
 
@@ -568,14 +726,14 @@ void random_move(char board[], char move[5], int *move_number)
     index_to_move(move, indexes);
 }
 
-int count_all_legal_moves(char board[], int color, int *move_number)
+int count_all_legal_moves(const Position *pos, int color)
 {
     int total = 0;
     int legalmoves_out[32];
 
     for (int i = 0; i < 64; i++)
     {
-        char piece = board[i];
+        char piece = pos->board[i];
         if (piece == '.') continue;
 
         int piece_color = isupper(piece) ? -1 : 1;
@@ -585,17 +743,17 @@ int count_all_legal_moves(char board[], int color, int *move_number)
         int pair[2] = {i, 32};
         index_to_move(move, pair);
 
-        int count = piecemove(board, move, legalmoves_out, move_number);
+        int count = piecemove(pos, move, legalmoves_out);
         total += count;
     }
 
     return total;
 }
 
-int game_status(char board[], int color, int *move_number)
+int game_status(const Position *pos, int color)
 {
-    int in_check = check_check(board, color);
-    int total_moves = count_all_legal_moves(board, color, move_number);
+    int in_check = check_check(pos, color);
+    int total_moves = count_all_legal_moves(pos, color);
 
     if (total_moves == 0)
     {
@@ -606,22 +764,23 @@ int game_status(char board[], int color, int *move_number)
     return 0; // game continues
 }
 
-
-int main() {
+void play(void)
+{
+    Position pos;
+    init_position(&pos);
     char move[10] = "";
-    int move_number = 0;
     int game_over = 0;
     while (strcmp(move, "stopp") != 0 && !game_over)
     {
         printf("\nEnter move: ");
         scanf("%9s", move);
-        if (strcmp(move, "stopp") == 0) break; // ellers prøver move_to_index å lese "stopp" som et trekk
+        if (strcmp(move, "stopp") == 0) break;
 
         int indexes[2];
         move_to_index(move, indexes);
 
         int legalmoves[32];
-        int count = piecemove(board, move, legalmoves, &move_number);
+        int count = piecemove(&pos, move, legalmoves);
 
         char moves[5];
         for (int i = 0; i < count; i++)
@@ -630,17 +789,33 @@ int main() {
             index_to_move(moves, pair);
             if (legalmoves[i] == indexes[1])
             {
-                char piece = board[indexes[0]];
-                move_push(board, move);
-                en_passant_move_change(move, piece);
-                move_number++;
-                int next_color = (move_number % 2 == 0) ? -1 : 1;
-                int status = game_status(board, next_color, &move_number);
-                if (status == 1) { printf("Checkmate!\n"); board_print(); game_over = 1; break; }
-                if (status == 2) { printf("Stalemate!\n"); board_print(); game_over = 1; break; }
-                board_print();
+                char piece = pos.board[indexes[0]];
+                move_push(&pos, move);
+                en_passant_move_change(&pos, move, piece);
+                pos.move_number++;
+                int next_color = (pos.move_number % 2 == 0) ? -1 : 1;
+                int status = game_status(&pos, next_color);
+                if (status == 1) {
+                    printf("Checkmate!\n");
+                    board_print(&pos);
+                    game_over = 1;
+                    break;
+                }
+                if (status == 2) {
+                    printf("Stalemate!\n");
+                    board_print(&pos);
+                    game_over = 1;
+                    break;
+                }
+                board_print(&pos);
             }
         }
     }
+}
+
+int main() {
+    srand(time(NULL));
+    play();
+
     return 0;
 }
