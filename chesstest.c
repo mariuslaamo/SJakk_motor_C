@@ -25,6 +25,7 @@ char brikker[6] = {
     'p', 'n', 'b', 'r', 'q', 'k'
 };
 
+int en_passant_move[2] = {0, 0};
 
 int is_enemy(char target_piece, int my_color) {
     if (target_piece == '.')
@@ -98,10 +99,63 @@ void board_print()
     printf("\n");
 }
 
+void en_passant_move_change(char move[], char piece)
+{
+    int index[2];
+    move_to_index(move, index);
+    if ((piece == 'p' && index[1] - index[0] == 16) || (piece == 'P' && index[0] - index[1] == 16))
+    {
+        en_passant_move[0] = index[0];
+        en_passant_move[1] = index[1];
+    }
+    else
+    {
+        en_passant_move[0] = 0;
+        en_passant_move[1] = 0;
+    }
+}
+
+int en_passant(char board[], int index[])
+{
+    if (en_passant_move[1] != 0)
+    {
+        int beside_pawn = (index[0] % 8 != 0 && index[0] - 1 == en_passant_move[1]) || (index[0] % 8 != 7 && index[0] + 1 == en_passant_move[1]);
+        if (board[index[0]] == 'P' && beside_pawn && board[en_passant_move[1]] == 'p')
+        {
+            return 1;
+        }
+        if (board[index[0]] == 'p' && beside_pawn && board[en_passant_move[1]] == 'P')
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void move_push(char board[], char move[])
 {
     int index[2];
     move_to_index(move, index);
+
+    char piece = board[index[0]];
+
+    if (en_passant(board, index) == 1)
+    {
+        // fjerner bare bonden hvis trekket faktisk er en passant (går til ruta bak bonden som gikk to frem)
+        if (isupper(piece) && index[1] + 8 == en_passant_move[1])
+        {
+            board[index[1]+8] = '.';
+        }
+        if (islower(piece) && index[1] - 8 == en_passant_move[1])
+        {
+            board[index[1]-8] = '.';
+        }
+    }
+
+    if (piece == 'K' && index[0] == 60 && index[1] == 62) {board[63] = '.'; board[61] = 'R';}
+    if (piece == 'K' && index[0] == 60 && index[1] == 58) {board[56] = '.'; board[59] = 'R';}
+    if (piece == 'k' && index[0] == 4 && index[1] == 6) {board[7] = '.'; board[5] = 'r';}
+    if (piece == 'k' && index[0] == 4 && index[1] == 2) {board[0] = '.'; board[3] = 'r';}
 
     if (index[0] == 56) moved[0] = 1;
     if (index[0] == 63) moved[1] = 1;
@@ -110,7 +164,6 @@ void move_push(char board[], char move[])
     if (index[0] == 4) moved[4] = 1;
     if (index[0] == 7) moved[5] = 1;
 
-    char piece = board[index[0]];
     board[index[0]] = '.';
     board[index[1]] = piece;
 }
@@ -156,6 +209,14 @@ void pawn_move(int color, char board[], int indexes[], int *idx, int legalmoves_
                 {
                     legalmoves_out[(*idx)++] = indexes[0] - 9;
                 }
+                if (indexes[0] - 1 >= 0 && indexes[0] % 8 != 0 && indexes[0] - 1 == en_passant_move[1] && is_enemy(board[indexes[0] - 1], color) && en_passant(board, indexes))
+                {
+                    legalmoves_out[(*idx)++] = indexes[0] - 9;
+                }
+                if (indexes[0] + 1 <= 63 && indexes[0] % 8 != 7 && indexes[0] + 1 == en_passant_move[1] && is_enemy(board[indexes[0] + 1], color) && en_passant(board, indexes))
+                {
+                    legalmoves_out[(*idx)++] = indexes[0] - 7;
+                }
 
 
             }
@@ -173,14 +234,23 @@ void pawn_move(int color, char board[], int indexes[], int *idx, int legalmoves_
                     legalmoves_out[(*idx)++] = indexes[0] + 8;
                     }
                 }
-                if (indexes[0] + 7 >= 0 && indexes[0] % 8 != 7 && is_enemy(board[indexes[0] + 7], color))
+                if (indexes[0] + 7 <= 63 && indexes[0] % 8 != 0 && is_enemy(board[indexes[0] + 7], color))
                 {
                     legalmoves_out[(*idx)++] = indexes[0] + 7;
                 }
-                if (indexes[0] + 9 >= 0 && indexes[0] % 8 != 7 && is_enemy(board[indexes[0] + 9], color))
+                if (indexes[0] + 9 <= 63 && indexes[0] % 8 != 7 && is_enemy(board[indexes[0] + 9], color))
                 {
                     legalmoves_out[(*idx)++] = indexes[0] + 9;
                 }
+                if (indexes[0] - 1 >= 0 && indexes[0] % 8 != 0 && indexes[0] - 1 == en_passant_move[1] && is_enemy(board[indexes[0] - 1], color) && en_passant(board, indexes))
+                {
+                    legalmoves_out[(*idx)++] = indexes[0] + 7;
+                }
+                if (indexes[0] + 1 <= 63 && indexes[0] % 8 != 7 && indexes[0] + 1 == en_passant_move[1] && is_enemy(board[indexes[0] + 1], color) && en_passant(board, indexes))
+                {
+                    legalmoves_out[(*idx)++] = indexes[0] + 9;
+                }
+
 
             }
 }
@@ -201,19 +271,19 @@ void knight_move(int color, char board[], int indexes[], int *idx, int legalmove
 
 
             if (indexes[0] - 10 >= 0 && indexes[0] % 8 >= 2 && board[indexes[0] - 10] == '.') legalmoves_out[(*idx)++] = indexes[0] - 10;
-            if (indexes[0] - 10 >= 0 && indexes[0] % 8 >= 2) {if (is_enemy(board[indexes[0] - 10], color)) {legalmoves_out[(*idx)++] = indexes[0] - 10;}
+            if (indexes[0] - 10 >= 0 && indexes[0] % 8 >= 2) {if (is_enemy(board[indexes[0] - 10], color)) {legalmoves_out[(*idx)++] = indexes[0] - 10;}}
 
             if (indexes[0] + 6 <= 63 && indexes[0] % 8 >= 2 && board[indexes[0] + 6] == '.') legalmoves_out[(*idx)++] = indexes[0] + 6;
             if (indexes[0] + 6 <= 63 && indexes[0] % 8 >= 2) {if (is_enemy(board[indexes[0] + 6], color)) {legalmoves_out[(*idx)++] = indexes[0] + 6;}}
 
-            if (indexes[0] + 10 <= 63 && indexes[0] % 8 >= 5 && board[indexes[0] + 10] == '.') legalmoves_out[(*idx)++] = indexes[0] + 10;
-            if (indexes[0] + 10 <= 63 && indexes[0] % 8 >= 5) {if (is_enemy(board[indexes[0] + 10], color)) {legalmoves_out[(*idx)++] = indexes[0] + 10;}}
+            if (indexes[0] + 10 <= 63 && indexes[0] % 8 <= 5 && board[indexes[0] + 10] == '.') legalmoves_out[(*idx)++] = indexes[0] + 10;
+            if (indexes[0] + 10 <= 63 && indexes[0] % 8 <= 5) {if (is_enemy(board[indexes[0] + 10], color)) {legalmoves_out[(*idx)++] = indexes[0] + 10;}}
 
-            if (indexes[0] - 6 >= 0 && indexes[0] % 8 >= 5 && board[indexes[0] - 6] == '.') legalmoves_out[(*idx)++] = indexes[0] - 6;
-            if (indexes[0] - 6 >= 0 && indexes[0] % 8 >= 5) {if (is_enemy(board[indexes[0] - 6], color)) {legalmoves_out[(*idx)++] = indexes[0] - 6;}}
+            if (indexes[0] - 6 >= 0 && indexes[0] % 8 <= 5 && board[indexes[0] - 6] == '.') legalmoves_out[(*idx)++] = indexes[0] - 6;
+            if (indexes[0] - 6 >= 0 && indexes[0] % 8 <= 5) {if (is_enemy(board[indexes[0] - 6], color)) {legalmoves_out[(*idx)++] = indexes[0] - 6;}}
 
-        
-}}
+
+}
 
 void rook_move(int color, char board[], int indexes[], int *idx, int legalmoves_out[])
 {
@@ -363,10 +433,15 @@ int try_move(char board[], char move[5], int color) // sjekker om man er i sjakk
 {
     char temp_board[64];
     memcpy(temp_board, board, 64);
+    int temp_moved[6];
+    memcpy(temp_moved, moved, sizeof(moved));
 
     move_push(temp_board, move);
+    int i_sjakk = check_check(temp_board, color);
 
-    if (check_check(temp_board, color)) {
+    memcpy(moved, temp_moved, sizeof(moved));
+
+    if (i_sjakk) {
     return 1;
     }
 
@@ -378,7 +453,7 @@ void castle(char board[], int indexes[], int legalmoves_out[], int *idx)
     char piece = board[indexes[0]];
     int color;
     if (isupper(piece)) {color = -1;}
-    else {color = -1;}
+    else {color = 1;}
 
     char movemove[5];
     index_to_move(movemove, indexes);
@@ -392,10 +467,7 @@ void castle(char board[], int indexes[], int legalmoves_out[], int *idx)
     if (castle_rights(board, indexes[0], rook_index[0]) == 1) {return;}
     if (try_move(board, movemove, color)) return;
 
-    legalmoves_out[(*idx)++] = indexes[1];
-    char move[5];
-    index_to_move(move, rook_index);
-    move_push(board, move);
+    legalmoves_out[(*idx)++] = indexes[1]; //
 }
 int legal(char board[], char move[]) { //Sjekker om det er en brikke der man vil flytte fra. 
     int indexes[2];
@@ -435,8 +507,6 @@ int piecemove(char board[], char move[], int legalmoves_out[], int *move_number)
         if (piece == 'K' && indexes[1] == 58 && indexes[0] == 60) castle(board, indexes, legalmoves_out, &idx);
         if (piece == 'K' && indexes[1] == 62 && indexes[0] == 60) castle(board, indexes, legalmoves_out, &idx);
 
-        if (try_move(board, move, color)) return 0;
-
         if (toupper(piece) == 'P') pawn_move(color, board, indexes, &idx, legalmoves_out);
             
         if (toupper(piece) == 'N') knight_move(color, board, indexes, &idx, legalmoves_out);
@@ -449,7 +519,17 @@ int piecemove(char board[], char move[], int legalmoves_out[], int *move_number)
 
         if (toupper(piece) == 'K') king_move(color, board, indexes, &idx, legalmoves_out);
 
-        return idx;
+        // tester hvert trekk brikken kan gjøre, ikke bare det som ble skrevet inn, og fjerner de som setter egen konge i sjakk
+        int count = 0;
+        for (int i = 0; i < idx; i++)
+        {
+            char test_move[5];
+            int pair[2] = {indexes[0], legalmoves_out[i]};
+            index_to_move(test_move, pair);
+            if (!try_move(board, test_move, color)) legalmoves_out[count++] = legalmoves_out[i];
+        }
+
+        return count;
     }
     return 0;
 }
@@ -527,15 +607,15 @@ int game_status(char board[], int color, int *move_number)
 }
 
 
-
 int main() {
-    char move[10];
+    char move[10] = "";
     int move_number = 0;
     int game_over = 0;
     while (strcmp(move, "stopp") != 0 && !game_over)
     {
         printf("\nEnter move: ");
-        scanf("%s", move);
+        scanf("%9s", move);
+        if (strcmp(move, "stopp") == 0) break; // ellers prøver move_to_index å lese "stopp" som et trekk
 
         int indexes[2];
         move_to_index(move, indexes);
@@ -550,7 +630,9 @@ int main() {
             index_to_move(moves, pair);
             if (legalmoves[i] == indexes[1])
             {
+                char piece = board[indexes[0]];
                 move_push(board, move);
+                en_passant_move_change(move, piece);
                 move_number++;
                 int next_color = (move_number % 2 == 0) ? -1 : 1;
                 int status = game_status(board, next_color, &move_number);
@@ -562,10 +644,3 @@ int main() {
     }
     return 0;
 }
-
-/*
-                char black_move[5];
-                random_move(board, black_move, &move_number);
-                move_push(board, black_move);
-                move_number++;
-*/
