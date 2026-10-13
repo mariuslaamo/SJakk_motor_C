@@ -570,9 +570,7 @@ int check_check(const Position *pos, int king_color)
         char piece = pos->board[i];
         if (piece == '.') continue;
 
-        int piece_color;
-        if (isupper(piece)) piece_color = -1;
-        if (islower(piece)) piece_color = 1;
+        int piece_color = isupper(piece) ? -1 : 1;  
 
         if (piece_color != enemy_color) continue;
 
@@ -757,30 +755,35 @@ void print_moves(const MoveList *list)
 
 void random_move(const Position *pos, char move[5])
 {
-    int black_pieces[20];
+    int pieces[20];
     int idx = 0;
     for (int i = 0; i < 64; i++)
     {
-        if (pos->board[i] != '.' && islower(pos->board[i]))
+        if (pos->board[i] != '.')
         {
-            black_pieces[idx++] = i;
+            if (isupper(pos->board[i]))
+            {
+            pieces[idx++] = i;
+            }
+            if (islower(pos->board[i]))
+            {
+            pieces[idx++] = i;
+            }
         }
     }
     int legalmovesb[32];
-
     int count = 0;
     int pt;
     int selected_piece_index[2];
-    selected_piece_index[1] = 31;
+    selected_piece_index[1] = 31;   
 
     while (count == 0)
     {
         pt = rand() % idx;
-        selected_piece_index[0] = black_pieces[pt];
+        selected_piece_index[0] = pieces[pt];
         index_to_move(move, selected_piece_index);
         count = piecemove(pos, move, legalmovesb);
     }
-
 
     int select_move = rand() % count;
     int indexes[2] = {selected_piece_index[0], legalmovesb[select_move]};
@@ -880,7 +883,6 @@ void play_random(void)
         char bot_move[5];
         index_to_move(bot_move, pair);
         make_move(&pos, bot_move);
-        printf("Bot plays %s\n", bot_move);
         board_print(&pos);
         if (game_over_check(&pos)) break;
     }
@@ -935,6 +937,38 @@ void play(void)
     }
 }
 
+int perft(Position *pos, int depth)
+{
+    int sum = 0;
+    if (depth == 0)
+    {
+        return 1;
+    }
+    MoveList list;
+
+    move_generator(pos, &list);
+    for (int k = 0; k < list.count; k++)
+    {
+        Position temp = *pos;
+        int pair[2] = {list.moves[k].from, list.moves[k].to};
+        char text[5];
+        index_to_move(text, pair);
+        make_move(&temp, text);
+        sum += perft(&temp, depth-1);
+    }
+    return sum;
+}
+
+void per(void)
+{
+    int depth = 4;
+    Position pos;
+    init_position(&pos);
+    int nodes = perft(&pos, depth);
+    printf("\nTotalt trekk med %d i dybde: %d", depth, nodes);
+}
+
+
 int main() {
     srand(time(NULL));
     char valg[10];
@@ -942,6 +976,7 @@ int main() {
     scanf("%9s", valg);
     if (strcmp(valg, "v") == 0) play();
     else if (strcmp(valg, "r") == 0) play_random();
+    else if (strcmp(valg, "p") == 0) per();
     else printf("Choose v or r\n");
 
     return 0;
