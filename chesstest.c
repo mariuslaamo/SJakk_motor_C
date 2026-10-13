@@ -729,6 +729,22 @@ void move_generator(const Position *pos, MoveList *list)
     {
         if (pos->board[i] == '.') continue;
 
+        if ((pos->board[i] == 'k' && i == 4) || (pos->board[i] == 'K' && i == 60))
+        {
+            char *castles[2];
+            if (i == 4) { castles[0] = "e8c8"; castles[1] = "e8g8"; }
+            else { castles[0] = "e1c1"; castles[1] = "e1g1"; }
+
+            for (int c = 0; c < 2; c++)
+            {
+                int tmp[32];
+                int n = piecemove(pos, castles[c], tmp);
+                int target = (c == 0) ? i - 2 : i + 2;
+                for (int k = 0; k < n; k++)
+                    if (tmp[k] == target) add_move(list, i, target);
+            }
+        }
+
         int legalmoves[32];
         int index[2] = {i, 32};
         char move[5];
@@ -888,6 +904,17 @@ void play_random(void)
     }
 }
 
+void set_castle_test(Position *pos) // kun brukt for å teste om generatoren fungerer med rokkade
+{
+    memset(pos->board, '.', 64);
+    pos->board[0] = 'r'; pos->board[4] = 'k'; pos->board[7] = 'r';
+    pos->board[56] = 'R'; pos->board[60] = 'K'; pos->board[63] = 'R';
+    memset(pos->moved, 0, sizeof(pos->moved));
+    pos->en_passant[0] = 0;
+    pos->en_passant[1] = 0;
+    pos->move_number = 0;
+}
+
 void play(void)
 {
     Position pos;
@@ -961,7 +988,7 @@ int perft(Position *pos, int depth)
 
 void per(void)
 {
-    int depth = 4;
+    int depth = 5;
     Position pos;
     init_position(&pos);
     int nodes = perft(&pos, depth);
