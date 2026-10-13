@@ -11,6 +11,9 @@ typedef struct {
     int move_number;
 } Position;
 
+typedef struct { int from; int to; } Move;
+typedef struct { Move moves[256]; int count; } MoveList;
+
 const char start_board[64] = {
     'r','n','b','q','k','b','n','r', // black
     'p','p','p','p','p','p','p','p',
@@ -50,6 +53,16 @@ int is_enemy(char target_piece, int my_color) {
 void move_to_index(char move[], int out[2]) {
     out[0] = (move[0] - 'a') + 8 * (8 - (move[1] - '0'));
     out[1] = (move[2] - 'a') + 8 * (8 - (move[3] - '0'));
+}
+
+int valid_input(const char move[])
+{
+    if (strlen(move) < 4) return 0;
+    if (move[0] < 'a' || move[0] > 'h') return 0;
+    if (move[1] < '1' || move[1] > '8') return 0;
+    if (move[2] < 'a' || move[2] > 'h') return 0;
+    if (move[3] < '1' || move[3] > '8') return 0;
+    return 1;
 }
 
 void index_to_move(char move[5], int in[2]) { // gjør om en index til et trekk (e2e4)
@@ -183,6 +196,16 @@ void move_push(Position *pos, char move[])
         if (promo != 'q' && promo != 'r' && promo != 'b' && promo != 'n') promo = 'q';
         pos->board[index[1]] = isupper(piece) ? toupper(promo) : promo;
     }
+}
+
+void make_move(Position *pos, char move[])
+{
+    int index[2];
+    move_to_index(move, index);
+    char piece = pos->board[index[0]];
+    move_push(pos, move);
+    en_passant_move_change(pos, move, piece);
+    pos->move_number++;
 }
 
 int castle_rights(const Position *pos, int king_index, int rook_index)
@@ -693,6 +716,45 @@ int piecemove(const Position *pos, char move[], int legalmoves_out[]) {
     return 0;
 }
 
+void add_move(MoveList *list, int from, int to)
+{
+    if (list->count >= 256) return;
+    list->moves[list->count].from = from;
+    list->moves[list->count].to = to;
+    list->count++;
+}
+
+void move_generator(const Position *pos, MoveList *list)
+{
+    list->count = 0;
+    for (int i = 0; i < 64; i++)
+    {
+        if (pos->board[i] == '.') continue;
+
+        int legalmoves[32];
+        int index[2] = {i, 32};
+        char move[5];
+        index_to_move(move, index);
+        int n_moves = piecemove(pos, move, legalmoves);
+        for (int k = 0; k < n_moves; k++)
+        {
+            add_move(list, i, legalmoves[k]);
+        }
+    }
+}
+
+void print_moves(const MoveList *list)
+{
+    for (int i = 0; i < list->count; i++)
+    {
+        int pair[2] = {list->moves[i].from, list->moves[i].to};
+        char text[5];
+        index_to_move(text, pair);
+        printf("%s\n", text);
+    }
+    printf("%d moves\n", list->count);
+}
+
 void random_move(const Position *pos, char move[5])
 {
     int black_pieces[20];
@@ -764,6 +826,66 @@ int game_status(const Position *pos, int color)
     return 0; // game continues
 }
 
+int game_over_check(const Position *pos)
+{
+    int next_color = (pos->move_number % 2 == 0) ? -1 : 1;
+    int status = game_status(pos, next_color);
+    if (status == 1) { printf("Checkmate!\n"); return 1; }
+    if (status == 2) { printf("Stalemate!\n"); return 1; }
+    return 0;
+}
+
+void play_random(void)
+{
+    Position pos;
+    init_position(&pos);
+    MoveList list;
+    char move[10] = "";
+
+    board_print(&pos);
+    while (1)
+    {
+        printf("\nEnter move: ");
+        scanf("%9s", move);
+        if (strcmp(move, "stopp") == 0) break;
+        if (!valid_input(move))
+        {
+            printf("Write a move like e2e4\n");
+            continue;
+        }
+
+        int indexes[2];
+        move_to_index(move, indexes);
+        int legalmoves[32];
+        int count = piecemove(&pos, move, legalmoves);
+
+        int found = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (legalmoves[i] == indexes[1]) found = 1;
+        }
+        if (!found)
+        {
+            printf("Illegal move\n");
+            continue;
+        }
+
+        make_move(&pos, move);
+        if (game_over_check(&pos)) { board_print(&pos); break; }
+
+        move_generator(&pos, &list);
+        if (list.count == 0) break;
+        int r = rand() % list.count;
+        int pair[2] = {list.moves[r].from, list.moves[r].to};
+        char bot_move[5];
+        index_to_move(bot_move, pair);
+        make_move(&pos, bot_move);
+        printf("Bot plays %s\n", bot_move);
+        board_print(&pos);
+        if (game_over_check(&pos)) break;
+    }
+}
+
 void play(void)
 {
     Position pos;
@@ -815,7 +937,12 @@ void play(void)
 
 int main() {
     srand(time(NULL));
-    play();
+    char valg[10];
+    printf("\nVanlig (v) eller random (r): ");
+    scanf("%9s", valg);
+    if (strcmp(valg, "v") == 0) play();
+    else if (strcmp(valg, "r") == 0) play_random();
+    else printf("Choose v or r\n");
 
     return 0;
 }
