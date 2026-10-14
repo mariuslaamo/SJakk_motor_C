@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <io.h>
 
 typedef struct {
     char board[64];
@@ -24,7 +25,98 @@ int piece_value(char piece)
     }
 }
 
+//hard koda verdier for hvor bra det er å være for brikker (mulig å gjøre om med nevrale nettverk)
+static const int pawn_pst[64] = {
+     0,  0,  0,  0,  0,  0,  0,  0,
+    50, 50, 50, 50, 50, 50, 50, 50,
+    10, 10, 20, 30, 30, 20, 10, 10,
+     5,  5, 10, 25, 25, 10,  5,  5,
+     0,  0,  0, 20, 20,  0,  0,  0,
+     5, -5,-10,  0,  0,-10, -5,  5,
+     5, 10, 10,-20,-20, 10, 10,  5,
+     0,  0,  0,  0,  0,  0,  0,  0
+};
 
+static const int knight_pst[64] = {
+   -50,-40,-30,-30,-30,-30,-40,-50,
+   -40,-20,  0,  0,  0,  0,-20,-40,
+   -30,  0, 10, 15, 15, 10,  0,-30,
+   -30,  5, 15, 20, 20, 15,  5,-30,
+   -30,  0, 15, 20, 20, 15,  0,-30,
+   -30,  5, 10, 15, 15, 10,  5,-30,
+   -40,-20,  0,  5,  5,  0,-20,-40,
+   -50,-40,-30,-30,-30,-30,-40,-50
+};
+
+static const int bishop_pst[64] = {
+   -20,-10,-10,-10,-10,-10,-10,-20,
+   -10,  0,  0,  0,  0,  0,  0,-10,
+   -10,  0,  5, 10, 10,  5,  0,-10,
+   -10,  5,  5, 10, 10,  5,  5,-10,
+   -10,  0, 10, 10, 10, 10,  0,-10,
+   -10, 10, 10, 10, 10, 10, 10,-10,
+   -10,  5,  0,  0,  0,  0,  5,-10,
+   -20,-10,-10,-10,-10,-10,-10,-20
+};
+
+static const int rook_pst[64] = {
+     0,  0,  0,  0,  0,  0,  0,  0,
+     5, 10, 10, 10, 10, 10, 10,  5,
+    -5,  0,  0,  0,  0,  0,  0, -5,
+    -5,  0,  0,  0,  0,  0,  0, -5,
+    -5,  0,  0,  0,  0,  0,  0, -5,
+    -5,  0,  0,  0,  0,  0,  0, -5,
+    -5,  0,  0,  0,  0,  0,  0, -5,
+     0,  -5,  0,  5,  5,  0,  -5,  0
+};
+
+static const int queen_pst[64] = {
+   -20,-10,-10, -5, -5,-10,-10,-20,
+   -10,  0,  0,  0,  0,  0,  0,-10,
+   -10,  0,  5,  5,  5,  5,  0,-10,
+    -5,  0,  5,  5,  5,  5,  0, -5,
+     0,  0,  5,  5,  5,  5,  0, -5,
+   -10,  5,  5,  5,  5,  5,  0,-10,
+   -10,  0,  5,  0,  0,  0,  0,-10,
+   -20,-10,-10, -5, -5,-10,-10,-20
+};
+
+static const int king_mid_pst[64] = {
+   -30,-40,-40,-50,-50,-40,-40,-30,
+   -30,-40,-40,-50,-50,-40,-40,-30,
+   -30,-40,-40,-50,-50,-40,-40,-30,
+   -30,-40,-40,-50,-50,-40,-40,-30,
+   -20,-30,-30,-40,-40,-30,-30,-20,
+   -10,-20,-20,-20,-20,-20,-20,-10,
+    20, 20,  0,  0,  0,  0, 20, 20,
+    20, 30, 10,  0,  0, 10, 30, 20
+};
+
+static const int king_end_pst[64] = {
+   -50,-40,-30,-20,-20,-30,-40,-50,
+   -30,-20,-10,  0,  0,-10,-20,-30,
+   -30,-10, 20, 30, 30, 20,-10,-30,
+   -30,-10, 30, 40, 40, 30,-10,-30,
+   -30,-10, 30, 40, 40, 30,-10,-30,
+   -30,-10, 20, 30, 30, 20,-10,-30,
+   -30,-30,  0,  0,  0,  0,-30,-30,
+   -50,-30,-30,-30,-30,-30,-30,-50
+};
+
+static int pst_value(char piece, int sq, int endgame)
+{
+    int idx = isupper(piece) ? sq : (sq ^ 56);
+    switch (toupper(piece))
+    {
+        case 'P': return pawn_pst[idx];
+        case 'N': return knight_pst[idx];
+        case 'B': return bishop_pst[idx];
+        case 'R': return rook_pst[idx];
+        case 'Q': return queen_pst[idx];
+        case 'K': return endgame ? king_end_pst[idx] : king_mid_pst[idx];
+        default:  return 0;
+    }
+}
 
 typedef struct { int from; int to; char promo; } Move;
 typedef struct { Move moves[256]; int count; } MoveList;
@@ -800,7 +892,6 @@ void print_moves(const MoveList *list)
         move_to_string(list->moves[i], text);
         printf("%s\n", text);
     }
-    printf("%d moves\n", list->count);
 }
 
 void random_move(const Position *pos, char move[5])
@@ -1046,11 +1137,153 @@ void per(void) //for å sjekke at den finner trekk riktig
     printf("Tid: %f", (float)end/CLOCKS_PER_SEC);
 }
 
-void motoren(void)
+// Faktisk motoren som skal bestemme trekk
+
+int evaluate(Position *pos)
+{
+    //int endgame = is_endgame(pos) //TODO
+    int w_mat = 0;
+    int b_mat = 0;
+    for (int i = 0; i < 64; i++)
+    {
+        char piece = pos->board[i];
+        if (piece != '.')
+        {
+            if (isupper(piece)) w_mat += piece_value(piece);
+            else b_mat += piece_value(piece);
+
+            if (isupper(piece)) w_mat += pst_value(piece, i, 0);
+            else b_mat += pst_value(piece, i, 0);
+        }
+
+    }
+
+    return (pos->move_number % 2 == 0) ? (w_mat - b_mat) : (b_mat - w_mat);
+
+}
+
+
+int negamax(Position *pos, int depth, int alpha, int beta)
+{
+    if (depth == 0)
+    {
+        return evaluate(pos);
+    }
+
+    MoveList list; 
+    move_generator(pos, &list);
+
+    if (list.count == 0)
+    {
+        int color = (pos->move_number % 2 == 0) ? -1 : 1;
+        if (check_check(pos, color)) return -(100000 + depth);
+        return 0;
+    }
+    
+    int best_score = -100000;
+    for (int move_n = 0; move_n < list.count; move_n++)
+    {
+        char text[6];
+        move_to_string(list.moves[move_n], text);
+        Position temp = *pos;
+        make_move(&temp, text);
+        int score = -negamax(&temp, depth - 1, -beta, -alpha);
+        if (score > best_score)
+        {
+            best_score = score;
+        }
+        if (best_score > alpha) alpha = best_score;
+
+    }
+    return best_score;
+}
+
+
+Move best_move(Position *pos, int depth)
+{
+    MoveList list;
+    move_generator(pos, &list);
+
+    Move best = list.moves[0];
+    int best_score = -100000;
+
+
+    int alpha = -100000;
+    int beta = 100000;
+    for (int i = 0; i < list.count; i++)
+    {
+        char text[6];
+        move_to_string(list.moves[i], text);
+        Position temp = *pos;
+        make_move(&temp, text);
+        int score = -negamax(&temp, depth - 1, -beta, -alpha);
+        if (score > best_score)
+        {
+            best_score = score;
+            best = list.moves[i];
+        }
+        if (best_score > alpha) alpha = best_score;
+    }
+    return best;
+}
+
+void uci_loop(void)
 {
     Position pos;
     init_position(&pos);
-    MoveList list;
+    char line[2048];
+
+    while (fgets(line, sizeof line, stdin))
+    {
+        line[strcspn(line, "\r\n")] = '\0';          // strip newline
+
+        if (strcmp(line, "uci") == 0)
+        {
+            printf("id name SjakkMotor\n");
+            printf("id author Marius\n");
+            printf("uciok\n");
+        }
+        else if (strcmp(line, "isready") == 0)
+        {
+            printf("readyok\n");
+        }
+        else if (strcmp(line, "ucinewgame") == 0)
+        {
+            init_position(&pos);
+        }
+        else if (strncmp(line, "position", 8) == 0)
+        {
+            init_position(&pos);                      // always rebuild from the start
+            char *moves = strstr(line, "moves");
+            if (moves != NULL)
+            {
+                char *tok = strtok(moves + 5, " ");   // first move after the word "moves"
+                while (tok != NULL)
+                {
+                    make_move(&pos, tok);
+                    tok = strtok(NULL, " ");
+                }
+            }
+        }
+        else if (strncmp(line, "go", 2) == 0)
+        {
+            Move m = best_move(&pos, 4);
+            char text[6];
+            move_to_string(m, text);
+            printf("bestmove %s\n", text);
+        }
+        else if (strcmp(line, "quit") == 0)
+        {
+            break;
+        }
+        fflush(stdout);                               // the GUI must see every reply
+    }
+}
+
+void motor(void)
+{
+    Position pos;
+    init_position(&pos);
     char move[10] = "";
 
     board_print(&pos);
@@ -1086,117 +1319,30 @@ void motoren(void)
 
         Move move;
         move = best_move(&pos, 4);
-        move_push(&pos, &move);
-
+        char best[6];
+        move_to_string(move, best);
+        make_move(&pos, best);
+        board_print(&pos);
     }
 }
 
-
-
-// Faktisk motoren som skal bestemme trekk
-
-int evaluate(Position *pos)
+int main(int argc, char *argv[])
 {
-    MoveList list;
-    move_generator(pos, &list);
-    if (&list.count == 0 && check_check(pos, pos->move_number) == 1)
+    srand(time(NULL));
+    if ((argc > 1 && strcmp(argv[1], "uci") == 0) || !_isatty(_fileno(stdin)))
     {
-        if (pos->move_number % 2 == 0) return 999999;
-        return -999999;
-    }
-    else if (&list.count == 0 && check_check(pos, pos->move_number) == 0) return 0;
-
-    //int endgame = is_endgame(pos) //TODO
-    int w_mat = 0;
-    int b_mat = 0;
-    for (int i = 0; i < 64; i++)
-    {
-        char piece = pos->board[i];
-        if (piece != '.')
-        {
-            if (isupper(piece)) w_mat += piece_value(piece);
-            else b_mat += piece_value(piece);
-        }
-    }
-
-    return (pos->move_number % 2 == 0) ? (w_mat - b_mat) : (b_mat - w_mat);
-
-}
-
-
-int negamax(Position *pos, int depth, int alpha, int beta)
-{
-    if (depth == 0)
-    {
-        return evaluate(pos);
-    }
-
-    MoveList list; 
-    move_generator(pos, &list);
-
-    if (list.count == 0)
-    {
-        int color = (pos->move_number % 2 == 0) ? -1 : 1;
-        if (check_check(pos, color)) return -(100000 + depth);
+        uci_loop();
         return 0;
     }
-    
-    int best_score = -100000;
-    for (int move_n = 0; move_n < list.count; move_n++)
-    {
-        char text[6];
-        move_to_string(list.moves[move_n], text);
-        Position temp = *pos;
-        make_move(&temp, text);
-        int score = -negamax(&temp, depth - 1, alpha, beta);
-        if (score > best_score)
-        {
-            best_score = score;
-        }
-    }
-    return best_score;
-}
 
-
-Move best_move(Position *pos, int depth)
-{
-    MoveList list;
-    move_generator(pos, &list);
-
-    Move best = list.moves[0];
-    int best_score = -100000;
-
-
-    int alpha = -100000;
-    int beta = 1000000;
-    for (int i = 0; i < list.count; i++)
-    {
-        char text[6];
-        move_to_string(list.moves[i], text);
-        Position temp = *pos;
-        make_move(&temp, text);
-        int score = -negamax(&temp, depth - 1, alpha, beta);
-        if (score > best_score)
-        {
-            best_score = score;
-            best = list.moves[k];
-        }
-    }
-    return best;
-}
-
-
-
-int main() {
-    srand(time(NULL));
     char valg[10];
-    printf("\nMotoren (m), vanlig (v) eller random (r): ");
+    printf("\nMotoren (m), vanlig (v), random (r) eller perft (p): ");
     scanf("%9s", valg);
     if (strcmp(valg, "v") == 0) play();
     else if (strcmp(valg, "r") == 0) play_random();
     else if (strcmp(valg, "p") == 0) per();
     else if (strcmp(valg, "m") == 0) motor();
-    else printf("Choose v or r\n");
+    else printf("Choose v, r, p or m\n");
 
     return 0;
 }
