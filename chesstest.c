@@ -11,7 +11,7 @@ typedef struct {
     int move_number;
 } Position;
 
-typedef struct { int from; int to; } Move;
+typedef struct { int from; int to; char promo; } Move;
 typedef struct { Move moves[256]; int count; } MoveList;
 
 const char start_board[64] = {
@@ -76,6 +76,13 @@ void index_to_move(char move[5], int in[2]) { // gjør om en index til et trekk 
     move[2] = 'a' + to_file;
     move[3] = '0' + to_rank;
     move[4] = '\0';
+}
+
+void move_to_string(Move m, char out[6])
+{
+    int pair[2] = {m.from, m.to};
+    index_to_move(out, pair);
+    if (m.promo) {out[4] = m.promo; out[5] = '\0';}
 }
 
 
@@ -188,8 +195,6 @@ void move_push(Position *pos, char move[])
     pos->board[index[0]] = '.';
     pos->board[index[1]] = piece;
 
-    // forvandling: femte tegn i trekket velger brikke (e7e8n),
-    // dronning hvis ingenting er oppgitt
     if ((piece == 'P' && index[1] <= 7) || (piece == 'p' && index[1] >= 56))
     {
         char promo = tolower(move[4]);
@@ -714,11 +719,12 @@ int piecemove(const Position *pos, char move[], int legalmoves_out[]) {
     return 0;
 }
 
-void add_move(MoveList *list, int from, int to)
+void add_move(MoveList *list, int from, int to, char promo)
 {
     if (list->count >= 256) return;
     list->moves[list->count].from = from;
     list->moves[list->count].to = to;
+    list->moves[list->count].promo = promo;
     list->count++;
 }
 
@@ -741,7 +747,7 @@ void move_generator(const Position *pos, MoveList *list)
                 int n = piecemove(pos, castles[c], tmp);
                 int target = (c == 0) ? i - 2 : i + 2;
                 for (int k = 0; k < n; k++)
-                    if (tmp[k] == target) add_move(list, i, target);
+                    if (tmp[k] == target) add_move(list, i, target, 0);
             }
         }
 
@@ -752,7 +758,21 @@ void move_generator(const Position *pos, MoveList *list)
         int n_moves = piecemove(pos, move, legalmoves);
         for (int k = 0; k < n_moves; k++)
         {
-            add_move(list, i, legalmoves[k]);
+            if (pos->board[i] == 'P' && legalmoves[k] <= 7)
+            {
+                add_move(list, i, legalmoves[k], 'q');
+                add_move(list, i, legalmoves[k], 'b');
+                add_move(list, i, legalmoves[k], 'n');
+                add_move(list, i, legalmoves[k], 'r');
+            }
+            else if (pos->board[i] == 'p' && 55 <= legalmoves[k])
+            {
+                add_move(list, i, legalmoves[k], 'q');
+                add_move(list, i, legalmoves[k], 'b');
+                add_move(list, i, legalmoves[k], 'n');
+                add_move(list, i, legalmoves[k], 'r');
+            }
+            add_move(list, i, legalmoves[k], 0);
         }
     }
 }
@@ -761,9 +781,8 @@ void print_moves(const MoveList *list)
 {
     for (int i = 0; i < list->count; i++)
     {
-        int pair[2] = {list->moves[i].from, list->moves[i].to};
-        char text[5];
-        index_to_move(text, pair);
+        char text[6];
+        move_to_string(list->moves[i], text);
         printf("%s\n", text);
     }
     printf("%d moves\n", list->count);
@@ -896,7 +915,7 @@ void play_random(void)
         if (list.count == 0) break;
         int r = rand() % list.count;
         int pair[2] = {list.moves[r].from, list.moves[r].to};
-        char bot_move[5];
+        char bot_move[6];
         index_to_move(bot_move, pair);
         make_move(&pos, bot_move);
         board_print(&pos);
@@ -913,6 +932,20 @@ void set_castle_test(Position *pos) // kun brukt for å teste om generatoren fun
     pos->en_passant[0] = 0;
     pos->en_passant[1] = 0;
     pos->move_number = 0;
+}
+
+void set_promo_test(Position *pos, MoveList *list) //kun brukt for å teste om generatoren fungerer med forskjellige promotions
+{
+    memset(pos->board, '.', 64);
+    pos->board[8]  = 'P';
+    pos->board[1]  = 'r';
+    pos->board[7]  = 'k';
+    pos->board[60] = 'K';
+    memset(pos->moved, 0, sizeof(pos->moved));
+    pos->en_passant[0] = 0;
+    pos->en_passant[1] = 0;
+    pos->move_number = 0;
+    move_generator(pos, list);
 }
 
 void play(void)
@@ -986,13 +1019,16 @@ int perft(Position *pos, int depth)
     return sum;
 }
 
-void per(void)
+void per(void) //for å sjekke at den finner trekk riktig
 {
+    int start = clock();
     int depth = 5;
     Position pos;
     init_position(&pos);
     int nodes = perft(&pos, depth);
     printf("\nTotalt trekk med %d i dybde: %d", depth, nodes);
+    int end = clock() - start;
+    printf("Tid: %f", (float)end/CLOCKS_PER_SEC);
 }
 
 
