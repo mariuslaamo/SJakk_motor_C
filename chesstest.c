@@ -11,6 +11,21 @@ typedef struct {
     int move_number;
 } Position;
 
+int piece_value(char piece)
+{
+    switch (toupper(piece))
+    {
+    case 'P': return 100;
+    case 'R': return 500;
+    case 'B': return 330;
+    case 'N': return 320;
+    case 'Q': return 900;
+    default: return 0;
+    }
+}
+
+
+
 typedef struct { int from; int to; char promo; } Move;
 typedef struct { Move moves[256]; int count; } MoveList;
 
@@ -1031,15 +1046,156 @@ void per(void) //for å sjekke at den finner trekk riktig
     printf("Tid: %f", (float)end/CLOCKS_PER_SEC);
 }
 
+void motoren(void)
+{
+    Position pos;
+    init_position(&pos);
+    MoveList list;
+    char move[10] = "";
+
+    board_print(&pos);
+    while (1)
+    {
+        printf("\nEnter move: ");
+        scanf("%9s", move);
+        if (strcmp(move, "stopp") == 0) break;
+        if (!valid_input(move))
+        {
+            printf("Write a move like e2e4\n");
+            continue;
+        }
+
+        int indexes[2];
+        move_to_index(move, indexes);
+        int legalmoves[32];
+        int count = piecemove(&pos, move, legalmoves);
+
+        int found = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (legalmoves[i] == indexes[1]) found = 1;
+        }
+        if (!found)
+        {
+            printf("Illegal move\n");
+            continue;
+        }
+
+        make_move(&pos, move);
+        if (game_over_check(&pos)) { board_print(&pos); break; }
+
+        Move move;
+        move = best_move(&pos, 4);
+        move_push(&pos, &move);
+
+    }
+}
+
+
+
+// Faktisk motoren som skal bestemme trekk
+
+int evaluate(Position *pos)
+{
+    MoveList list;
+    move_generator(pos, &list);
+    if (&list.count == 0 && check_check(pos, pos->move_number) == 1)
+    {
+        if (pos->move_number % 2 == 0) return 999999;
+        return -999999;
+    }
+    else if (&list.count == 0 && check_check(pos, pos->move_number) == 0) return 0;
+
+    //int endgame = is_endgame(pos) //TODO
+    int w_mat = 0;
+    int b_mat = 0;
+    for (int i = 0; i < 64; i++)
+    {
+        char piece = pos->board[i];
+        if (piece != '.')
+        {
+            if (isupper(piece)) w_mat += piece_value(piece);
+            else b_mat += piece_value(piece);
+        }
+    }
+
+    return (pos->move_number % 2 == 0) ? (w_mat - b_mat) : (b_mat - w_mat);
+
+}
+
+
+int negamax(Position *pos, int depth, int alpha, int beta)
+{
+    if (depth == 0)
+    {
+        return evaluate(pos);
+    }
+
+    MoveList list; 
+    move_generator(pos, &list);
+
+    if (list.count == 0)
+    {
+        int color = (pos->move_number % 2 == 0) ? -1 : 1;
+        if (check_check(pos, color)) return -(100000 + depth);
+        return 0;
+    }
+    
+    int best_score = -100000;
+    for (int move_n = 0; move_n < list.count; move_n++)
+    {
+        char text[6];
+        move_to_string(list.moves[move_n], text);
+        Position temp = *pos;
+        make_move(&temp, text);
+        int score = -negamax(&temp, depth - 1, alpha, beta);
+        if (score > best_score)
+        {
+            best_score = score;
+        }
+    }
+    return best_score;
+}
+
+
+Move best_move(Position *pos, int depth)
+{
+    MoveList list;
+    move_generator(pos, &list);
+
+    Move best = list.moves[0];
+    int best_score = -100000;
+
+
+    int alpha = -100000;
+    int beta = 1000000;
+    for (int i = 0; i < list.count; i++)
+    {
+        char text[6];
+        move_to_string(list.moves[i], text);
+        Position temp = *pos;
+        make_move(&temp, text);
+        int score = -negamax(&temp, depth - 1, alpha, beta);
+        if (score > best_score)
+        {
+            best_score = score;
+            best = list.moves[k];
+        }
+    }
+    return best;
+}
+
+
 
 int main() {
     srand(time(NULL));
     char valg[10];
-    printf("\nVanlig (v) eller random (r): ");
+    printf("\nMotoren (m), vanlig (v) eller random (r): ");
     scanf("%9s", valg);
     if (strcmp(valg, "v") == 0) play();
     else if (strcmp(valg, "r") == 0) play_random();
     else if (strcmp(valg, "p") == 0) per();
+    else if (strcmp(valg, "m") == 0) motor();
     else printf("Choose v or r\n");
 
     return 0;
