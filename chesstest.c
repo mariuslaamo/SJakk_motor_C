@@ -10,6 +10,8 @@ typedef struct {
     int moved[6];
     int en_passant[2];
     int move_number;
+    int w_king;
+    int b_king;
 } Position;
 
 int piece_value(char piece)
@@ -135,6 +137,27 @@ const char start_board[64] = {
 void init_position(Position *pos)
 {
     memcpy(pos->board, start_board, 64);
+    memset(pos->moved, 0, sizeof(pos->moved));
+    pos->en_passant[0] = 0;
+    pos->en_passant[1] = 0;
+    pos->move_number = 0;
+    pos->b_king = 4;
+    pos->w_king = 60;
+}
+
+void init_kiwipete(Position *pos) // typisk midtspill posisjon
+{
+    const char kiwipete[64] = {
+        'r','.','.','.','k','.','.','r',
+        'p','.','p','p','q','p','b','.',
+        'b','n','.','.','p','n','p','.',
+        '.','.','.','P','N','.','.','.',
+        '.','p','.','.','P','.','.','.',
+        '.','.','N','.','.','Q','.','p',
+        'P','P','P','B','B','P','P','P',
+        'R','.','.','.','K','.','.','R'
+    };
+    memcpy(pos->board, kiwipete, 64);
     memset(pos->moved, 0, sizeof(pos->moved));
     pos->en_passant[0] = 0;
     pos->en_passant[1] = 0;
@@ -298,6 +321,9 @@ void move_push(Position *pos, char move[])
     if (index[0] == 0 || index[1] == 0) pos->moved[3] = 1;
     if (index[0] == 4 || index[1] == 4) pos->moved[4] = 1;
     if (index[0] == 7 || index[1] == 7) pos->moved[5] = 1;
+
+    if (piece == 'K') pos->w_king = index[1];
+    if (piece == 'k') pos->b_king = index[1];
 
     pos->board[index[0]] = '.';
     pos->board[index[1]] = piece;
@@ -667,50 +693,77 @@ void king_move(const Position *pos, int color, int indexes[], int *idx, int lega
         legalmoves_out[(*idx)++] = indexes[0] + 9;
 }
 
-int check_check(const Position *pos, int king_color)
+
+int check_check(const Position *pos, int defender_color)
 {
-    int legalmoves_out[192];
-    int idx = 0;
-    int enemy_color;
-    if (king_color == -1) {
-        enemy_color = 1;
-    } else {
-        enemy_color = -1;
-    }
-    for (int i = 0; i < 64; i++)
+    static const int knight_row_change[8] = {-2, -2, -1, -1, 1, 1, 2, 2}; // for å sjekke hest
+    static const int knight_col_change[8] = {-1, 1, -2, 2, -2, 2, -1, 1};
+
+    static const int dir_row_change[8] = {-1, -1, -1, 0, 0, 1, 1, 1}; // for å sjekke retning
+    static const int dir_col_change[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+
+    int target_square = 0;
+    if (defender_color == -1) target_square = pos->w_king;
+    else if (defender_color == 1) target_square = pos->b_king;
+
+
+    int target_row = target_square / 8;
+    int target_col = target_square % 8;
+
+    for (int i = 0; i < 8; i++)
     {
-        char piece = pos->board[i];
-        if (piece == '.') continue;
+        int row = target_row + knight_row_change[i];
+        int col = target_col + knight_col_change[i];
+        if (row < 0 || row > 7 || col < 0 || col > 7) continue;
 
-        int piece_color = isupper(piece) ? -1 : 1;  
-
-        if (piece_color != enemy_color) continue;
-
-        int indexes[2] = {i, 32};
-        if (toupper(piece) == 'P') pawn_move(pos, enemy_color, indexes, &idx, legalmoves_out);
-
-        if (toupper(piece) == 'N') knight_move(pos, enemy_color, indexes, &idx, legalmoves_out);
-
-        if (toupper(piece) == 'R') rook_move(pos, enemy_color, indexes, &idx, legalmoves_out);
-
-        if (toupper(piece) == 'B') bishop_move(pos, enemy_color, indexes, &idx, legalmoves_out);
-
-        if (toupper(piece) == 'Q') queen_move(pos, enemy_color, indexes, &idx, legalmoves_out);
-
-        if (toupper(piece) == 'K') king_move(pos, enemy_color, indexes, &idx, legalmoves_out);
-    }
-    char king_char;
-    if (king_color == -1) {
-        king_char = 'K';
-    } else {
-        king_char = 'k';
-    }
-    for (int k = 0; k < idx; k++) {
-        if (pos->board[legalmoves_out[k]] == king_char) return 1;
+        char piece = pos->board[row * 8 + col];
+        if (is_enemy(piece, defender_color) && (piece == 'n' || piece == 'N')) return 1;
     }
 
+   if (defender_color == -1)
+   {
+       if (target_row >= 1)
+       {
+           if (target_col != 7 && pos->board[target_square - 7] == 'p') return 1;
+           if (target_col != 0 && pos->board[target_square - 9] == 'p') return 1;
+       }
+   }
+   else
+   {
+       if (target_row <= 6)
+       {
+           if (target_col != 0 && pos->board[target_square + 7] == 'P') return 1;
+           if (target_col != 7 && pos->board[target_square + 9] == 'P') return 1;
+       }
+   }
+    
+    for (int dir = 0; dir < 8; dir++)
+    {
+        int is_straight_line = (dir_row_change[dir] == 0 || dir_col_change[dir] == 0);
+
+        for (int distance = 1; ; distance++)
+        {
+            int row = target_row + dir_row_change[dir] * distance;
+            int col = target_col + dir_col_change[dir] * distance;
+            if (row < 0 || row > 7 || col < 0 || col > 7) break;
+
+            char piece = pos->board[row*8 + col];
+            if (piece == '.') continue;
+
+            if (is_enemy(piece, defender_color))
+            {
+                char type = toupper(piece);
+                if (type == 'Q') return 1;
+                if (type == 'R' && is_straight_line) return 1;
+                if (type == 'B' && !is_straight_line) return 1;
+                if (type == 'K' && distance == 1) return 1;
+            }
+        break;
+        }
+    }
     return 0;
 }
+
 
 // sjekker om man er i sjakk etter et trekk
 int try_move(const Position *pos, char move[5], int color)
@@ -838,9 +891,21 @@ void add_move(MoveList *list, int from, int to, char promo)
 void move_generator(const Position *pos, MoveList *list)
 {
     list->count = 0;
+    int mover_col = (pos->move_number % 2 == 1) ? 1 : -1;
     for (int i = 0; i < 64; i++)
-    {
+    {   
         if (pos->board[i] == '.') continue;
+
+        if (mover_col == -1)
+        {
+            if (pos->board[i] == 'P' || pos->board[i] == 'R' || pos->board[i] == 'K' || pos->board[i] == 'B' ||
+            pos->board[i] == 'N' || pos->board[i] == 'Q') continue;
+        }
+        if (mover_col == 1)
+        {
+            if (pos->board[i] == 'p' || pos->board[i] == 'r' || pos->board[i] == 'k' || pos->board[i] == 'b' ||
+            pos->board[i] == 'n' || pos->board[i] == 'q') continue;
+        }
 
         if ((pos->board[i] == 'k' && i == 4) || (pos->board[i] == 'K' && i == 60))
         {
@@ -1128,7 +1193,7 @@ int perft(Position *pos, int depth)
 void per(void) //for å sjekke at den finner trekk riktig
 {
     int start = clock();
-    int depth = 5;
+    int depth = 6;
     Position pos;
     init_position(&pos);
     int nodes = perft(&pos, depth);
@@ -1193,6 +1258,7 @@ int negamax(Position *pos, int depth, int alpha, int beta)
             best_score = score;
         }
         if (best_score > alpha) alpha = best_score;
+        if (alpha >= beta) break;
 
     }
     return best_score;
@@ -1235,7 +1301,7 @@ void uci_loop(void)
 
     while (fgets(line, sizeof line, stdin))
     {
-        line[strcspn(line, "\r\n")] = '\0';          // strip newline
+        line[strcspn(line, "\r\n")] = '\0';
 
         if (strcmp(line, "uci") == 0)
         {
@@ -1253,11 +1319,11 @@ void uci_loop(void)
         }
         else if (strncmp(line, "position", 8) == 0)
         {
-            init_position(&pos);                      // always rebuild from the start
+            init_position(&pos);
             char *moves = strstr(line, "moves");
             if (moves != NULL)
             {
-                char *tok = strtok(moves + 5, " ");   // first move after the word "moves"
+                char *tok = strtok(moves + 5, " ");
                 while (tok != NULL)
                 {
                     make_move(&pos, tok);
@@ -1276,7 +1342,7 @@ void uci_loop(void)
         {
             break;
         }
-        fflush(stdout);                               // the GUI must see every reply
+        fflush(stdout);
     }
 }
 
@@ -1326,6 +1392,17 @@ void motor(void)
     }
 }
 
+void time_it(void)
+{
+    int start1 = clock();
+    int depth1 = 8;
+    Position pos1;
+    init_kiwipete(&pos1);
+    best_move(&pos1, depth1);
+    int end1 = clock() - start1;
+    printf("\nTid med dybde %d: %f", depth1, (float)end1/CLOCKS_PER_SEC);
+}
+
 int main(int argc, char *argv[])
 {
     srand(time(NULL));
@@ -1342,6 +1419,7 @@ int main(int argc, char *argv[])
     else if (strcmp(valg, "r") == 0) play_random();
     else if (strcmp(valg, "p") == 0) per();
     else if (strcmp(valg, "m") == 0) motor();
+    else if (strcmp(valg, "t") == 0) time_it();
     else printf("Choose v, r, p or m\n");
 
     return 0;
