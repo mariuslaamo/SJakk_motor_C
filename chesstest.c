@@ -120,7 +120,7 @@ static int pst_value(char piece, int sq, int endgame)
     }
 }
 
-typedef struct { int from; int to; char promo; } Move;
+typedef struct { int from; int to; char promo; int score; } Move;
 typedef struct { Move moves[256]; int count; } MoveList;
 
 const char start_board[64] = {
@@ -162,6 +162,8 @@ void init_kiwipete(Position *pos) // typisk midtspill posisjon
     pos->en_passant[0] = 0;
     pos->en_passant[1] = 0;
     pos->move_number = 0;
+    pos->b_king = 4;
+    pos->w_king = 60; 
 }
 
 int is_enemy(char target_piece, int my_color) {
@@ -821,6 +823,13 @@ int legal(const char board[], char move[]) {
     return 0;
 }
 
+int on_line_with_king(int king_square, int piece_square)
+{
+    int row_diff = piece_square / 8 - king_square / 8;
+    int col_diff = piece_square % 8 - king_square % 8;
+    return row_diff == 0 || col_diff == 0 || row_diff == col_diff || row_diff == -col_diff;
+}
+
 // skal finne lovlige trekk for brikken
 int piecemove(const Position *pos, char move[], int legalmoves_out[]) {
     if (!legal(pos->board, move)) {
@@ -879,29 +888,150 @@ int piecemove(const Position *pos, char move[], int legalmoves_out[]) {
     return 0;
 }
 
+int piecemove_fast(const Position *pos, char move[], int legalmoves_out[], int in_check, char pinned[]) {
+    if (!legal(pos->board, move)) {
+        printf("trekket er ulovlighehe");
+        return 0;
+    }
+
+    int indexes[2];
+    move_to_index(move, indexes);
+    char piece = pos->board[indexes[0]];
+
+    int color;
+    int idx = 0;
+
+    if (isupper(piece)) {
+        color = -1;
+    } else {
+        color = 1;
+    }
+
+    if ((pos->move_number % 2 == 0 && isupper(piece))
+        || (pos->move_number % 2 == 1 && islower(piece)))
+    {
+        if (piece == 'k' && indexes[1] == 2 && indexes[0] == 4)
+            castle(pos, indexes, legalmoves_out, &idx);
+        if (piece == 'k' && indexes[1] == 6 && indexes[0] == 4)
+            castle(pos, indexes, legalmoves_out, &idx);
+        if (piece == 'K' && indexes[1] == 58 && indexes[0] == 60)
+            castle(pos, indexes, legalmoves_out, &idx);
+        if (piece == 'K' && indexes[1] == 62 && indexes[0] == 60)
+            castle(pos, indexes, legalmoves_out, &idx);
+
+        if (toupper(piece) == 'P') pawn_move(pos, color, indexes, &idx, legalmoves_out);
+
+        if (toupper(piece) == 'N') knight_move(pos, color, indexes, &idx, legalmoves_out);
+
+        if (toupper(piece) == 'R') rook_move(pos, color, indexes, &idx, legalmoves_out);
+
+        if (toupper(piece) == 'B') bishop_move(pos, color, indexes, &idx, legalmoves_out);
+
+        if (toupper(piece) == 'Q') queen_move(pos, color, indexes, &idx, legalmoves_out);
+
+        if (toupper(piece) == 'K') king_move(pos, color, indexes, &idx, legalmoves_out);
+
+        int is_king = (toupper(piece) == 'K');
+
+        int count = 0;
+        for (int i = 0; i < idx; i++)
+        {
+            int to = legalmoves_out[i];
+
+            int is_en_passant = (toupper(piece) == 'P'
+                                && to % 8 != indexes[0] % 8
+                                && pos->board[to] == '.');
+
+            int needs_testing = is_king || in_check || pinned[indexes[0]] || is_en_passant;
+
+            if (needs_testing)
+            {
+                char test_move[5];
+                int pair[2] = {indexes[0], to};
+                index_to_move(test_move, pair);
+                if (try_move(pos, test_move, color)) continue;
+            }
+            legalmoves_out[count++] = to;
+        }
+        return count;
+    }
+    return 0;
+}
+
 void add_move(MoveList *list, int from, int to, char promo)
 {
     if (list->count >= 256) return;
     list->moves[list->count].from = from;
     list->moves[list->count].to = to;
     list->moves[list->count].promo = promo;
+    list->moves[list->count].score = 0;
     list->count++;
 }
+
+void find_pin(const Position *pos, int color, char pinned[64])
+{
+    static const int dir_row_change[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+    static const int dir_col_change[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+
+    memset(pinned, 0, 64);
+    int king_square = (color == -1) ? pos->w_king : pos->b_king;
+    int king_row = king_square / 8;
+    int king_col = king_square % 8;    
+
+    for (int dir = 0; dir < 8; dir++)
+    {
+        int is_straight_line = (dir_row_change[dir] == 0 || dir_col_change[dir] == 0);
+        int own_piece = -1;
+
+        for (int distance = 1; ; distance++)
+        {
+            int row = king_row + dir_row_change[dir] * distance;
+            int col = king_col + dir_col_change[dir] * distance;
+            if (row < 0 || row > 7 || col < 0 || col > 7) break;
+
+            int square = row * 8 + col;
+            char piece = pos->board[square];
+            if (piece == '.') continue;
+
+            if (!is_enemy(piece, color))
+            {
+                if (own_piece != -1) break;
+                own_piece = square;
+                continue;
+            }
+
+            if (own_piece != -1)
+            {
+                char type = toupper(piece);
+                if ((type == 'Q')
+                    || (type == 'R' && is_straight_line)
+                    || (type == 'B' && !is_straight_line))
+                    pinned[own_piece] = 1;
+            }
+        break;
+        }
+    }
+}
+
 
 void move_generator(const Position *pos, MoveList *list)
 {
     list->count = 0;
     int mover_col = (pos->move_number % 2 == 1) ? 1 : -1;
+    int in_check;
+    char pinned[64];
+    find_pin(pos, mover_col, pinned);
+    in_check = check_check(pos, mover_col);
     for (int i = 0; i < 64; i++)
     {   
         if (pos->board[i] == '.') continue;
 
-        if (mover_col == -1)
+        if (mover_col == 1)
         {
             if (pos->board[i] == 'P' || pos->board[i] == 'R' || pos->board[i] == 'K' || pos->board[i] == 'B' ||
             pos->board[i] == 'N' || pos->board[i] == 'Q') continue;
         }
-        if (mover_col == 1)
+        if (mover_col == -1)
         {
             if (pos->board[i] == 'p' || pos->board[i] == 'r' || pos->board[i] == 'k' || pos->board[i] == 'b' ||
             pos->board[i] == 'n' || pos->board[i] == 'q') continue;
@@ -916,7 +1046,7 @@ void move_generator(const Position *pos, MoveList *list)
             for (int c = 0; c < 2; c++)
             {
                 int tmp[32];
-                int n = piecemove(pos, castles[c], tmp);
+                int n = piecemove_fast(pos, castles[c], tmp, in_check, pinned);
                 int target = (c == 0) ? i - 2 : i + 2;
                 for (int k = 0; k < n; k++)
                     if (tmp[k] == target) add_move(list, i, target, 0);
@@ -927,7 +1057,7 @@ void move_generator(const Position *pos, MoveList *list)
         int index[2] = {i, 32};
         char move[5];
         index_to_move(move, index);
-        int n_moves = piecemove(pos, move, legalmoves);
+        int n_moves = piecemove_fast(pos, move, legalmoves, in_check, pinned);
         for (int k = 0; k < n_moves; k++)
         {
             if (pos->board[i] == 'P' && legalmoves[k] <= 7)
@@ -937,14 +1067,17 @@ void move_generator(const Position *pos, MoveList *list)
                 add_move(list, i, legalmoves[k], 'n');
                 add_move(list, i, legalmoves[k], 'r');
             }
-            else if (pos->board[i] == 'p' && 55 <= legalmoves[k])
+            else if (pos->board[i] == 'p' && 56 <= legalmoves[k])
             {
                 add_move(list, i, legalmoves[k], 'q');
                 add_move(list, i, legalmoves[k], 'b');
                 add_move(list, i, legalmoves[k], 'n');
                 add_move(list, i, legalmoves[k], 'r');
             }
+            else
+            {
             add_move(list, i, legalmoves[k], 0);
+            }
         }
     }
 }
@@ -1176,14 +1309,12 @@ int perft(Position *pos, int depth)
         return 1;
     }
     MoveList list;
-
     move_generator(pos, &list);
     for (int k = 0; k < list.count; k++)
     {
         Position temp = *pos;
-        int pair[2] = {list.moves[k].from, list.moves[k].to};
-        char text[5];
-        index_to_move(text, pair);
+        char text[6];
+        move_to_string(list.moves[k], text);
         make_move(&temp, text);
         sum += perft(&temp, depth-1);
     }
@@ -1395,7 +1526,7 @@ void motor(void)
 void time_it(void)
 {
     int start1 = clock();
-    int depth1 = 8;
+    int depth1 = 5;
     Position pos1;
     init_kiwipete(&pos1);
     best_move(&pos1, depth1);
