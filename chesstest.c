@@ -1013,6 +1013,30 @@ void find_pin(const Position *pos, int color, char pinned[64])
     }
 }
 
+void scoring(Position *pos, MoveList *list)
+{
+    for (int i = 0; i < list->count; i++)
+    {
+        Move *m = &list->moves[i];
+        char mover = pos->board[m->from];
+        char victim = pos->board[m->to];
+
+        if (victim != '.')
+        {
+            m->score = 10000 + 10 * piece_value(victim) - piece_value(mover);
+        }
+        else
+        {
+            m->score = pst_value(mover, m->to, 0) - pst_value(mover, m->from, 0);
+        }
+        if (m->promo == 'q') m->score += 900;
+    }
+}
+
+int comp_moves(const void *a, const void *b)
+{
+    return ((const Move *)b)->score - ((const Move *)a)->score;
+}
 
 void move_generator(const Position *pos, MoveList *list)
 {
@@ -1359,15 +1383,33 @@ int evaluate(Position *pos)
 }
 
 
-int negamax(Position *pos, int depth, int alpha, int beta)
+int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
 {
     if (depth == 0)
     {
         return evaluate(pos);
     }
 
+    int color = (pos->move_number % 2 == 0) ? -1 : 1;
+    int in_check = check_check(pos, color);
+
+    if (allow_null && !in_check && depth >= 3)
+    {
+        Position temp = *pos;
+        temp.move_number++;
+        temp.en_passant[0] = 0;
+        temp.en_passant[1] = 0;
+
+        int R = 2;
+        int score = -negamax(&temp, depth - 1 - R, -beta, -beta + 1, 0);
+        if (score >= beta) return beta;
+    }
+
+
     MoveList list; 
     move_generator(pos, &list);
+
+    scoring(pos, &list);
 
     if (list.count == 0)
     {
@@ -1376,14 +1418,40 @@ int negamax(Position *pos, int depth, int alpha, int beta)
         return 0;
     }
     
-    int best_score = -100000;
+    int best_score = -10000000;
     for (int move_n = 0; move_n < list.count; move_n++)
     {
+        int best_index = move_n;
+        for (int j = move_n + 1; j < list.count; j++)
+        {
+            if (list.moves[j].score > list.moves[best_index].score) best_index = j;
+        }
+        Move tmp = list.moves[move_n];
+        list.moves[move_n] = list.moves[best_index];
+        list.moves[best_index] = tmp;
+
+        Move m = list.moves[move_n];
+        int is_capture = (pos->board[m.to] != '.');
+
         char text[6];
         move_to_string(list.moves[move_n], text);
         Position temp = *pos;
         make_move(&temp, text);
-        int score = -negamax(&temp, depth - 1, -beta, -alpha);
+
+        int score;
+        if (move_n >= 3 && depth >= 3 && !in_check && !is_capture && !m.promo)
+        {
+            score = -negamax(&temp, depth - 2, -alpha - 1, -alpha, 1);
+
+            if (score > alpha)
+            {
+                score = -negamax(&temp, depth - 1, -beta, -alpha, 1);
+            }
+        }
+        else
+        {
+            score = -negamax(&temp, depth - 1, -beta, -alpha, 1);
+        }
         if (score > best_score)
         {
             best_score = score;
@@ -1402,18 +1470,20 @@ Move best_move(Position *pos, int depth)
     move_generator(pos, &list);
 
     Move best = list.moves[0];
-    int best_score = -100000;
+    int best_score = -10000000;
 
+    scoring(pos, &list);
+    qsort(list.moves, list.count, sizeof(Move), comp_moves);
 
-    int alpha = -100000;
-    int beta = 100000;
+    int alpha = -10000000;
+    int beta = 10000000;
     for (int i = 0; i < list.count; i++)
     {
         char text[6];
         move_to_string(list.moves[i], text);
         Position temp = *pos;
         make_move(&temp, text);
-        int score = -negamax(&temp, depth - 1, -beta, -alpha);
+        int score = -negamax(&temp, depth - 1, -beta, -alpha, 1);
         if (score > best_score)
         {
             best_score = score;
@@ -1515,7 +1585,7 @@ void motor(void)
         if (game_over_check(&pos)) { board_print(&pos); break; }
 
         Move move;
-        move = best_move(&pos, 4);
+        move = best_move(&pos, 8);
         char best[6];
         move_to_string(move, best);
         make_move(&pos, best);
@@ -1526,7 +1596,7 @@ void motor(void)
 void time_it(void)
 {
     int start1 = clock();
-    int depth1 = 5;
+    int depth1 = 9;
     Position pos1;
     init_kiwipete(&pos1);
     best_move(&pos1, depth1);
