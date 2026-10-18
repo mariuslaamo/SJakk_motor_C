@@ -4,6 +4,25 @@
 #include <stdlib.h>
 #include <time.h>
 #include <io.h>
+#include <stdint.h>
+
+
+#define TT_SIZE (1 << 20)
+#define TT_EXACT 0
+#define TT_LOWER 1
+#define TT_UPPER 2
+#define MAX_PLY 128
+
+typedef struct {
+    uint64_t key;
+    int8_t depth;
+    int32_t score;
+    int8_t flag;
+    int8_t from, to;
+    char promo;
+} TTEntry;
+
+static TTEntry tt[TT_SIZE];
 
 typedef struct {
     char board[64];
@@ -12,6 +31,7 @@ typedef struct {
     int move_number;
     int w_king;
     int b_king;
+    uint64_t hash;
 } Position;
 
 int piece_value(char piece)
@@ -105,6 +125,42 @@ static const int king_end_pst[64] = {
    -50,-30,-30,-30,-30,-30,-30,-50
 };
 
+static uint64_t zob_piece[12][64];
+static uint64_t zob_side;
+static uint64_t zob_castle[6];
+static uint64_t zob_ep[8];
+
+static uint64_t rand64(void)
+{
+    static uint64_t s = 0x9E3779B97F4A7C15ULL;
+    s ^= s << 13;
+    s ^= s >> 7;
+    s ^= s << 17;
+    return s;
+}
+
+static int piece_index(char p)
+{
+    switch (p) {
+    case 'P': return 0; case 'N': return 1; case 'B': return 2;
+    case 'R': return 3; case 'Q': return 4; case 'K': return 5;
+    case 'p': return 6; case 'n': return 7; case 'b': return 8;
+    case 'r': return 9; case 'q': return 10; case 'k': return 11;
+    default:  return -1;
+    }
+}
+
+void init_zobrist(void)
+{
+    for (int p = 0; p < 12; p++)
+    {
+        for (int s = 0; s < 64; s++) zob_piece[p][s] = rand64();
+    }
+    zob_side = rand64();
+    for (int i = 0; i < 6; i++) zob_castle[i] = rand64();
+    for (int i = 0; i < 8; i++) zob_ep[i] = rand64();
+}
+
 static int pst_value(char piece, int sq, int endgame)
 {
     int idx = isupper(piece) ? sq : (sq ^ 56);
@@ -123,6 +179,10 @@ static int pst_value(char piece, int sq, int endgame)
 typedef struct { int from; int to; char promo; int score; } Move;
 typedef struct { Move moves[256]; int count; } MoveList;
 
+static Move killers[MAX_PLY][2];
+static int history[2][64][64];
+static int root_move_number;
+
 const char start_board[64] = {
     'r','n','b','q','k','b','n','r', // black
     'p','p','p','p','p','p','p','p',
@@ -134,6 +194,21 @@ const char start_board[64] = {
     'R','N','B','Q','K','B','N','R'
 };
 
+uint64_t compute_hash(const Position *pos)
+{
+    uint64_t h = 0;
+    for (int s = 0; s < 64; s++)
+    {
+        int p = piece_index(pos->board[s]);
+        if (p >= 0) h ^= zob_piece[p][s];
+    }
+    if (pos->move_number % 2 == 1) h ^= zob_side;
+    for (int i = 0; i < 6; i++) if (pos->moved[i]) h ^= zob_castle[i];
+    if (pos->en_passant[1] != 0) h ^= zob_ep[pos->en_passant[1] % 8];
+    return h;
+}
+
+
 void init_position(Position *pos)
 {
     memcpy(pos->board, start_board, 64);
@@ -143,6 +218,7 @@ void init_position(Position *pos)
     pos->move_number = 0;
     pos->b_king = 4;
     pos->w_king = 60;
+    pos->hash = compute_hash(pos);
 }
 
 void init_kiwipete(Position *pos) // typisk midtspill posisjon
@@ -163,7 +239,8 @@ void init_kiwipete(Position *pos) // typisk midtspill posisjon
     pos->en_passant[1] = 0;
     pos->move_number = 0;
     pos->b_king = 4;
-    pos->w_king = 60; 
+    pos->w_king = 60;
+    pos->hash = compute_hash(pos);
 }
 
 void init_rook_endgame(Position *pos)
@@ -299,6 +376,15 @@ int en_passant(const Position *pos, int index[])
     return 0;
 }
 
+static void set_sq(Position *pos, int sq, char piece)
+{
+    int old = piece_index(pos->board[sq]);
+    if (old >= 0) pos->hash ^= zob_piece[old][sq];
+    int nw = piece_index(piece);
+    if (nw >= 0) pos->hash ^= zob_piece[nw][sq];
+    pos->board[sq] = piece;
+}
+
 void move_push(Position *pos, int index[3])
 {
     char piece = pos->board[index[0]];
@@ -309,29 +395,29 @@ void move_push(Position *pos, int index[3])
         // (går til ruta bak bonden som gikk to frem)
         if (isupper(piece) && index[1] + 8 == pos->en_passant[1])
         {
-            pos->board[index[1]+8] = '.';
+            set_sq(pos, index[1] + 8, '.');
         }
         if (islower(piece) && index[1] - 8 == pos->en_passant[1])
         {
-            pos->board[index[1]-8] = '.';
+            set_sq(pos, index[1] - 8, '.');
         }
     }
 
     if (piece == 'K' && index[0] == 60 && index[1] == 62) {
-        pos->board[63] = '.';
-        pos->board[61] = 'R';
+        set_sq(pos, 63, '.');
+        set_sq(pos, 61, 'R');
     }
     if (piece == 'K' && index[0] == 60 && index[1] == 58) {
-        pos->board[56] = '.';
-        pos->board[59] = 'R';
+        set_sq(pos, 56, '.');
+        set_sq(pos, 59, 'R');
     }
     if (piece == 'k' && index[0] == 4 && index[1] == 6) {
-        pos->board[7] = '.';
-        pos->board[5] = 'r';
+        set_sq(pos, 7, '.');
+        set_sq(pos, 5, 'r');
     }
     if (piece == 'k' && index[0] == 4 && index[1] == 2) {
-        pos->board[0] = '.';
-        pos->board[3] = 'r';
+        set_sq(pos, 0, '.');
+        set_sq(pos, 3, 'r');
     }
 
     if (index[0] == 56 || index[1] == 56) pos->moved[0] = 1;
@@ -344,14 +430,15 @@ void move_push(Position *pos, int index[3])
     if (piece == 'K') pos->w_king = index[1];
     if (piece == 'k') pos->b_king = index[1];
 
-    pos->board[index[0]] = '.';
-    pos->board[index[1]] = piece;
+    set_sq(pos, index[0], '.');
+    set_sq(pos, index[1], piece);
 
     if ((piece == 'P' && index[1] <= 7) || (piece == 'p' && index[1] >= 56))
     {
         char promo = tolower(index[2]);
         if (promo != 'q' && promo != 'r' && promo != 'b' && promo != 'n') promo = 'q';
-        pos->board[index[1]] = isupper(piece) ? toupper(promo) : promo;
+        char piecee = isupper(piece) ? toupper(promo) : promo;
+        set_sq(pos, index[1], piecee);
     }
 }
 
@@ -359,8 +446,16 @@ void make_move(Position *pos, int from, int to, int promo)
 {
     int index[3] = {from, to, promo};
     char piece = pos->board[index[0]];
+    int old_moved[6];
+    memcpy(old_moved, pos->moved, sizeof old_moved);
+    if (pos->en_passant[1] != 0) pos->hash ^= zob_ep[pos->en_passant[1] % 8];
+
     move_push(pos, index);
     en_passant_move_change(pos, index, piece);
+
+    for (int i = 0; i < 6; i++) if (old_moved[i] != pos->moved[i]) pos->hash ^= zob_castle[i];
+    if (pos->en_passant[1] != 0) pos->hash ^= zob_ep[pos->en_passant[1] % 8];
+    pos->hash ^= zob_side;
     pos->move_number++;
 }
 
@@ -1457,7 +1552,6 @@ int evaluate(Position *pos)
 
 }
 
-// tidsstyring: søket avbrytes når hard_limit_ms er brukt
 static clock_t search_start;
 static int hard_limit_ms = 2000000000;
 static int can_stop = 0;
@@ -1470,8 +1564,13 @@ static int elapsed_ms(void)
     return (int)((clock() - search_start) * 1000 / CLOCKS_PER_SEC);
 }
 
+
+
 int quiesce(Position *pos, int alpha, int beta)
 {
+    nodes++;
+    if (can_stop && (nodes & 2047) == 0 && elapsed_ms() >= hard_limit_ms) stop_search = 1;
+    if (stop_search) return 0;
     int stand_pat = evaluate(pos);
     if (stand_pat >= beta) return stand_pat;
     if (stand_pat > alpha) alpha = stand_pat;
@@ -1506,10 +1605,29 @@ int quiesce(Position *pos, int alpha, int beta)
     return alpha;
 }
 
+int has_non_pawn(Position *pos, int color)
+{
+    for (int i = 0; i < 64; i++)
+    {
+        char p = pos->board[i];
+        if (p == '.' || p == 'P' || p == 'p' || p == 'K' || p == 'k') continue;
+        if ((color == -1) == (isupper(p) != 0)) return 1; 
+    }
+    return 0;
+}
+
 
 int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
 {
+    nodes++;
+    if (can_stop && (nodes & 2047) == 0 && elapsed_ms() >= hard_limit_ms) stop_search = 1;
+    if (stop_search) return 0;
     int color = (pos->move_number % 2 == 0) ? -1 : 1;
+
+    int ply = pos->move_number - root_move_number;
+    if (ply >= MAX_PLY) ply = MAX_PLY - 1;
+    int side = pos->move_number % 2;
+
     int in_check = check_check(pos, color);
     if (in_check) depth++;
 
@@ -1518,12 +1636,30 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
         return quiesce(pos, alpha, beta);
     }
 
-    if (allow_null && !in_check && depth >= 3)
+    int alpha_orig = alpha;
+    TTEntry *e = &tt[pos->hash & (TT_SIZE - 1)];
+    int has_tt_move = 0;
+
+    if (e->key == pos->hash)
+    {
+        has_tt_move = 1;
+        if (e->depth >= depth)
+        {
+            if (e->flag == TT_EXACT) return e->score;
+            if (e->flag == TT_LOWER && e->score >= beta) return e->score;
+            if (e->flag == TT_UPPER && e->score <= alpha) return e->score;
+        }
+    }
+
+
+    if (allow_null && !in_check && depth >= 3 && has_non_pawn(pos, color))
     {
         Position temp = *pos;
-        temp.move_number++;
+        if (temp.en_passant[1] != 0) temp.hash ^=zob_ep[temp.en_passant[1] % 8];
         temp.en_passant[0] = 0;
         temp.en_passant[1] = 0;
+        temp.move_number++;
+        temp.hash ^= zob_side;
 
         int R = 2;
         int score = -negamax(&temp, depth - 1 - R, -beta, -beta + 1, 0);
@@ -1539,12 +1675,34 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
 
     if (list.count == 0)
     {
-        //int color = (pos->move_number % 2 == 0) ? -1 : 1;
         if (in_check) return -(100000 + depth);
         return 0;
     }
+
+    if (has_tt_move)
+    {
+        for (int i = 0; i < list.count; i++)
+        {
+            if (list.moves[i].from == e->from && list.moves[i].to == e->to
+                && list.moves[i].promo == e->promo)
+                list.moves[i].score = 1000000;
+        }
+    }
+
+    for (int i = 0; i < list.count; i++)
+    {
+        Move *mv = &list.moves[i];
+        if (mv->score >= 10000) continue;
+        if (pos->board[mv->to] != '.' || mv->promo) continue;
+
+        if (mv->from == killers[ply][0].from && mv->to == killers[ply][0].to) mv->score = 9000;
+        else if (mv->from == killers[ply][1].from && mv->to == killers[ply][1].to) mv->score = 8000;
+        else mv->score += history[side][mv->from][mv->to];
+    }
     
     int best_score = -10000000;
+    Move best_m = {0, 0, 0, 0};
+
     for (int move_n = 0; move_n < list.count; move_n++)
     {
         int best_index = move_n;
@@ -1580,11 +1738,38 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
         if (score > best_score)
         {
             best_score = score;
+            best_m = m;
         }
         if (best_score > alpha) alpha = best_score;
-        if (alpha >= beta) break;
+        if (alpha >= beta)
+        {
+            if (!is_capture && !m.promo && killers[ply][0].to == m.to)
+            {
+                killers[ply][1] = killers[ply][0];
+                killers[ply][0] = m;
+            }
+
+            history[side][m.from][m.to] += depth * depth;
+            if (history[side][m.from][m.to] > 7000)
+            {
+                for (int f = 0; f < 64; f++)
+                {
+                    for (int t = 0; t < 64; t++) history[side][f][t] /= 2;
+                }
+            }
+            break;
+        }
 
     }
+    e->key = pos->hash;
+    e->depth = depth;
+    e->score = best_score;
+    e->flag = (best_score <= alpha_orig) ? TT_UPPER
+            : (best_score >= beta) ? TT_LOWER
+            : TT_EXACT;
+    e->from = best_m.from;
+    e->to = best_m.to;
+    e->promo = best_m.promo;
     return best_score;
 }
 
@@ -1634,6 +1819,19 @@ Move think(Position *pos, int soft_ms, int hard_ms, int max_depth)
     nodes = 0;
     Move best = {0, 0, 0, 0};
 
+    root_move_number = pos->move_number;
+    memset(killers, 0, sizeof killers);
+    for (int s = 0; s < 2; s++)
+    {
+        for (int f = 0; f < 64; f++)
+        {
+            for (int t = 0; t < 64; t++)
+            {
+                history[s][f][t] /= 2;
+            }
+        }
+    }
+
     for (int depth = 1; depth <= max_depth; depth++)
     {
         can_stop = (depth > 1);
@@ -1647,7 +1845,7 @@ Move think(Position *pos, int soft_ms, int hard_ms, int max_depth)
         if (used_ms >= soft_ms) break;
     }
     can_stop = 0;
-    hard_limit_ms = 2000000000;
+    hard_limit_ms = 5000;
     return best;
 }
 
@@ -1807,18 +2005,14 @@ void time_it(void)
     int depth1 = 9;
     Position pos1;
     init_kiwipete(&pos1);
-    Move a;
-    a.from = 0;
-    a.promo = 0;
-    a.to = 0;
-    a.score = 0;
-    best_move(&pos1, depth1, a);
+    think(&pos1, 200000, 200000, 9);
     int end1 = clock() - start1;
     printf("\nTid med dybde %d: %f", depth1, (float)end1/CLOCKS_PER_SEC);
 }
 
 int main(int argc, char *argv[])
 {
+    init_zobrist();
     srand(time(NULL));
     if ((argc > 1 && strcmp(argv[1], "uci") == 0) || !_isatty(_fileno(stdin)))
     {
