@@ -244,10 +244,8 @@ void board_print(const Position *pos)
     printf("\n");
 }
 
-void en_passant_move_change(Position *pos, char move[], char piece)
+void en_passant_move_change(Position *pos, int index[3], char piece)
 {
-    int index[2];
-    move_to_index(move, index);
     if ((piece == 'p' && index[1] - index[0] == 16)
         || (piece == 'P' && index[0] - index[1] == 16))
     {
@@ -279,11 +277,8 @@ int en_passant(const Position *pos, int index[])
     return 0;
 }
 
-void move_push(Position *pos, char move[])
+void move_push(Position *pos, int index[3])
 {
-    int index[2];
-    move_to_index(move, index);
-
     char piece = pos->board[index[0]];
 
     if (en_passant(pos, index) == 1)
@@ -332,19 +327,18 @@ void move_push(Position *pos, char move[])
 
     if ((piece == 'P' && index[1] <= 7) || (piece == 'p' && index[1] >= 56))
     {
-        char promo = tolower(move[4]);
+        char promo = tolower(index[2]);
         if (promo != 'q' && promo != 'r' && promo != 'b' && promo != 'n') promo = 'q';
         pos->board[index[1]] = isupper(piece) ? toupper(promo) : promo;
     }
 }
 
-void make_move(Position *pos, char move[])
+void make_move(Position *pos, int from, int to, int promo)
 {
-    int index[2];
-    move_to_index(move, index);
+    int index[3] = {from, to, promo};
     char piece = pos->board[index[0]];
-    move_push(pos, move);
-    en_passant_move_change(pos, move, piece);
+    move_push(pos, index);
+    en_passant_move_change(pos, index, piece);
     pos->move_number++;
 }
 
@@ -768,10 +762,10 @@ int check_check(const Position *pos, int defender_color)
 
 
 // sjekker om man er i sjakk etter et trekk
-int try_move(const Position *pos, char move[5], int color)
+int try_move(const Position *pos, int index[3], int color)
 {
     Position temp = *pos;
-    move_push(&temp, move);
+    move_push(&temp, index);
     return check_check(&temp, color);
 }
 
@@ -781,9 +775,6 @@ void castle(const Position *pos, int indexes[], int legalmoves_out[], int *idx)
     int color;
     if (isupper(piece)) {color = -1;}
     else {color = 1;}
-
-    char movemove[5];
-    index_to_move(movemove, indexes);
 
     int step = (indexes[1] > indexes[0]) ? 1 : -1; // 1 = kort rokade, -1 = lang rokade
     int rook_index = (step == 1) ? indexes[0] + 3 : indexes[0] - 4;
@@ -800,21 +791,17 @@ void castle(const Position *pos, int indexes[], int legalmoves_out[], int *idx)
 
     // kan ikke rokere ut av sjakk eller gjennom en angrepet rute
     if (check_check(pos, color)) return;
-    int pass[2] = {indexes[0], indexes[0] + step};
-    char pass_move[5];
-    index_to_move(pass_move, pass);
-    if (try_move(pos, pass_move, color)) return;
+    int pass[3] = {indexes[0], indexes[0] + step, 0};
+    if (try_move(pos, pass, color)) return;
 
-    if (try_move(pos, movemove, color)) return;
+    int full[3] = {indexes[0], indexes[1], 0};
+    if (try_move(pos, full, color)) return;
 
     legalmoves_out[(*idx)++] = indexes[1];
 }
 
 // Sjekker om det er en brikke der man vil flytte fra.
-int legal(const char board[], char move[]) {
-    int indexes[2];
-    move_to_index(move, indexes);
-
+int legal(const char board[], int indexes[]) {
     if (board[indexes[0]] != '.')
     {
         return 1;
@@ -832,14 +819,14 @@ int on_line_with_king(int king_square, int piece_square)
 
 // skal finne lovlige trekk for brikken
 int piecemove(const Position *pos, char move[], int legalmoves_out[]) {
-    if (!legal(pos->board, move)) {
+    int indexes[3];
+    move_to_index(move, indexes);
+    char piece = pos->board[indexes[0]];
+
+    if (!legal(pos->board, indexes)) {
         printf("trekket er ulovlighehe");
         return 0;
     }
-
-    int indexes[2];
-    move_to_index(move, indexes);
-    char piece = pos->board[indexes[0]];
 
     int color;
     int idx = 0;
@@ -877,10 +864,8 @@ int piecemove(const Position *pos, char move[], int legalmoves_out[]) {
         int count = 0;
         for (int i = 0; i < idx; i++)
         {
-            char test_move[5];
-            int pair[2] = {indexes[0], legalmoves_out[i]};
-            index_to_move(test_move, pair);
-            if (!try_move(pos, test_move, color)) legalmoves_out[count++] = legalmoves_out[i];
+            int test[3] = {indexes[0], legalmoves_out[i], 0};
+            if (!try_move(pos, test, color)) legalmoves_out[count++] = legalmoves_out[i];
         }
 
         return count;
@@ -888,14 +873,11 @@ int piecemove(const Position *pos, char move[], int legalmoves_out[]) {
     return 0;
 }
 
-int piecemove_fast(const Position *pos, char move[], int legalmoves_out[], int in_check, char pinned[]) {
-    if (!legal(pos->board, move)) {
+int piecemove_fast(const Position *pos, int indexes[], int legalmoves_out[], int in_check, char pinned[]) {
+    if (!legal(pos->board, indexes)) {
         printf("trekket er ulovlighehe");
         return 0;
     }
-
-    int indexes[2];
-    move_to_index(move, indexes);
     char piece = pos->board[indexes[0]];
 
     int color;
@@ -946,10 +928,8 @@ int piecemove_fast(const Position *pos, char move[], int legalmoves_out[], int i
 
             if (needs_testing)
             {
-                char test_move[5];
-                int pair[2] = {indexes[0], to};
-                index_to_move(test_move, pair);
-                if (try_move(pos, test_move, color)) continue;
+                int test[3] = {indexes[0], to, 0};
+                if (try_move(pos, test, color)) continue;
             }
             legalmoves_out[count++] = to;
         }
@@ -1061,27 +1041,22 @@ void move_generator(const Position *pos, MoveList *list)
             pos->board[i] == 'n' || pos->board[i] == 'q') continue;
         }
 
-        if ((pos->board[i] == 'k' && i == 4) || (pos->board[i] == 'K' && i == 60))
+        if (!in_check && ((pos->board[i] == 'k' && i == 4) || (pos->board[i] == 'K' && i == 60)))
         {
-            char *castles[2];
-            if (i == 4) { castles[0] = "e8c8"; castles[1] = "e8g8"; }
-            else { castles[0] = "e1c1"; castles[1] = "e1g1"; }
-
             for (int c = 0; c < 2; c++)
             {
-                int tmp[32];
-                int n = piecemove_fast(pos, castles[c], tmp, in_check, pinned);
                 int target = (c == 0) ? i - 2 : i + 2;
-                for (int k = 0; k < n; k++)
-                    if (tmp[k] == target) add_move(list, i, target, 0);
+                int indexes[2] = {i, target};
+                int tmp[1];
+                int n = 0;
+                castle(pos, indexes, tmp, &n);
+                if (n) add_move(list, i, target, 0);
             }
         }
 
         int legalmoves[32];
-        int index[2] = {i, 32};
-        char move[5];
-        index_to_move(move, index);
-        int n_moves = piecemove_fast(pos, move, legalmoves, in_check, pinned);
+        int index[3] = {i, 32, 0};
+        int n_moves = piecemove_fast(pos, index, legalmoves, in_check, pinned);
         for (int k = 0; k < n_moves; k++)
         {
             if (pos->board[i] == 'P' && legalmoves[k] <= 7)
@@ -1220,7 +1195,7 @@ void play_random(void)
             continue;
         }
 
-        int indexes[2];
+        int indexes[3];
         move_to_index(move, indexes);
         int legalmoves[32];
         int count = piecemove(&pos, move, legalmoves);
@@ -1236,16 +1211,14 @@ void play_random(void)
             continue;
         }
 
-        make_move(&pos, move);
+        make_move(&pos, indexes[0], indexes[1], move[4]);
         if (game_over_check(&pos)) { board_print(&pos); break; }
 
         move_generator(&pos, &list);
         if (list.count == 0) break;
         int r = rand() % list.count;
-        int pair[2] = {list.moves[r].from, list.moves[r].to};
-        char bot_move[6];
-        index_to_move(bot_move, pair);
-        make_move(&pos, bot_move);
+        int pair[3] = {list.moves[r].from, list.moves[r].to, list.moves[r].promo};
+        make_move(&pos, pair[0], pair[1], pair[2]);
         board_print(&pos);
         if (game_over_check(&pos)) break;
     }
@@ -1288,7 +1261,7 @@ void play(void)
         scanf("%9s", move);
         if (strcmp(move, "stopp") == 0) break;
 
-        int indexes[2];
+        int indexes[3];
         move_to_index(move, indexes);
 
         int legalmoves[32];
@@ -1301,10 +1274,7 @@ void play(void)
             index_to_move(moves, pair);
             if (legalmoves[i] == indexes[1])
             {
-                char piece = pos.board[indexes[0]];
-                move_push(&pos, move);
-                en_passant_move_change(&pos, move, piece);
-                pos.move_number++;
+                make_move(&pos, indexes[0], indexes[1], move[4]);
                 int next_color = (pos.move_number % 2 == 0) ? -1 : 1;
                 int status = game_status(&pos, next_color);
                 if (status == 1) {
@@ -1337,9 +1307,7 @@ int perft(Position *pos, int depth)
     for (int k = 0; k < list.count; k++)
     {
         Position temp = *pos;
-        char text[6];
-        move_to_string(list.moves[k], text);
-        make_move(&temp, text);
+        make_move(&temp, list.moves[k].from, list.moves[k].to, list.moves[k].promo);
         sum += perft(&temp, depth-1);
     }
     return sum;
@@ -1382,12 +1350,45 @@ int evaluate(Position *pos)
 
 }
 
+int quiesce(Position *pos, int alpha, int beta)
+{
+    int stand_pat = evaluate(pos);
+    if (stand_pat >= beta) return stand_pat;
+    if (stand_pat > alpha) alpha = stand_pat;
+
+    MoveList list;
+    move_generator(pos, &list);
+    scoring(pos, &list);
+
+    for (int n = 0; n < list.count; n++)
+    {
+        int best_index = n;
+        for (int j = n + 1; j < list.count; j++)
+        {
+            if (list.moves[j].score > list.moves[best_index].score) best_index = j;
+        }
+        Move tmp = list.moves[best_index];
+        list.moves[best_index] = tmp;
+
+        Move m = list.moves[n];
+        if (m.score < 10000) break;
+
+        Position temp = *pos;
+        make_move(&temp, m.from, m.to, m.promo);
+        int score = -quiesce(&temp, -beta, -alpha);
+
+        if (score >= beta) return score;
+        if (score > alpha) alpha = score;
+    }
+    return alpha;
+}
+
 
 int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
 {
     if (depth == 0)
     {
-        return evaluate(pos);
+        return quiesce(pos, alpha, beta);
     }
 
     int color = (pos->move_number % 2 == 0) ? -1 : 1;
@@ -1414,7 +1415,7 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
     if (list.count == 0)
     {
         int color = (pos->move_number % 2 == 0) ? -1 : 1;
-        if (check_check(pos, color)) return -(100000 + depth);
+        if (in_check) return -(100000 + depth);
         return 0;
     }
     
@@ -1433,10 +1434,8 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
         Move m = list.moves[move_n];
         int is_capture = (pos->board[m.to] != '.');
 
-        char text[6];
-        move_to_string(list.moves[move_n], text);
         Position temp = *pos;
-        make_move(&temp, text);
+        make_move(&temp, m.from, m.to, m.promo);
 
         int score;
         if (move_n >= 3 && depth >= 3 && !in_check && !is_capture && !m.promo)
@@ -1464,7 +1463,7 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
 }
 
 
-Move best_move(Position *pos, int depth)
+Move best_move(Position *pos, int depth, Move first)
 {
     MoveList list;
     move_generator(pos, &list);
@@ -1473,16 +1472,21 @@ Move best_move(Position *pos, int depth)
     int best_score = -10000000;
 
     scoring(pos, &list);
+
+    for (int i = 0; i < list.count; i++)
+    {
+        if (list.moves[i].from == first.from && list.moves[i].to == first.to
+            && list.moves[i].promo == first.promo) list.moves[i].score = 100000;
+    }
+
     qsort(list.moves, list.count, sizeof(Move), comp_moves);
 
     int alpha = -10000000;
     int beta = 10000000;
     for (int i = 0; i < list.count; i++)
     {
-        char text[6];
-        move_to_string(list.moves[i], text);
         Position temp = *pos;
-        make_move(&temp, text);
+        make_move(&temp, list.moves[i].from, list.moves[i].to, list.moves[i].promo);
         int score = -negamax(&temp, depth - 1, -beta, -alpha, 1);
         if (score > best_score)
         {
@@ -1527,14 +1531,21 @@ void uci_loop(void)
                 char *tok = strtok(moves + 5, " ");
                 while (tok != NULL)
                 {
-                    make_move(&pos, tok);
+                    int idx[2];
+                    move_to_index(tok, idx);
+                    make_move(&pos, idx[0], idx[1], tok[4]);
                     tok = strtok(NULL, " ");
                 }
             }
         }
         else if (strncmp(line, "go", 2) == 0)
         {
-            Move m = best_move(&pos, 4);
+            Move a;
+            a.from = 0;
+            a.promo = 0;
+            a.to = 0;
+            a.score = 0;
+            Move m = best_move(&pos, 4, a);
             char text[6];
             move_to_string(m, text);
             printf("bestmove %s\n", text);
@@ -1581,14 +1592,17 @@ void motor(void)
             continue;
         }
 
-        make_move(&pos, move);
+        make_move(&pos, indexes[0], indexes[1], move[4]);
         if (game_over_check(&pos)) { board_print(&pos); break; }
 
+        Move a;
+        a.from = 0;
+        a.promo = 0;
+        a.to = 0;
+        a.score = 0;
         Move move;
-        move = best_move(&pos, 8);
-        char best[6];
-        move_to_string(move, best);
-        make_move(&pos, best);
+        move = best_move(&pos, 8, a);
+        make_move(&pos, move.from, move.to, move.promo);
         board_print(&pos);
     }
 }
@@ -1599,7 +1613,12 @@ void time_it(void)
     int depth1 = 9;
     Position pos1;
     init_kiwipete(&pos1);
-    best_move(&pos1, depth1);
+    Move a;
+    a.from = 0;
+    a.promo = 0;
+    a.to = 0;
+    a.score = 0;
+    best_move(&pos1, depth1, a);
     int end1 = clock() - start1;
     printf("\nTid med dybde %d: %f", depth1, (float)end1/CLOCKS_PER_SEC);
 }
