@@ -12,16 +12,22 @@
 #define TT_LOWER 1
 #define TT_UPPER 2
 #define MAX_PLY 128
+#define MATE_SCORE 100000
+#define MATE_BOUND (MATE_SCORE - MAX_PLY)
+#define HIST_SIZE 4096
 
 typedef struct {
     uint64_t key;
-    int8_t depth;
+    int16_t depth;
     int32_t score;
     int8_t flag;
     int8_t from, to;
     char promo;
+    uint8_t age;
 } TTEntry;
 
+static uint8_t tt_age;
+static uint64_t hash_history[HIST_SIZE];
 static TTEntry tt[TT_SIZE];
 
 typedef struct {
@@ -32,11 +38,28 @@ typedef struct {
     int w_king;
     int b_king;
     uint64_t hash;
+    int halfmove;
+    int mg, eg, phase;
+    int piece_count[12];
 } Position;
+
+char to_upper(char piece)
+{
+    switch (piece)
+    {
+        case 'p': return 'P';
+        case 'b': return 'B';
+        case 'n': return 'N';
+        case 'q': return 'Q';
+        case 'k': return 'K';
+        case 'r': return 'R';
+    }
+    return piece;
+}
 
 int piece_value(char piece)
 {
-    switch (toupper(piece))
+    switch (to_upper(piece))
     {
     case 'P': return 100;
     case 'R': return 500;
@@ -46,6 +69,8 @@ int piece_value(char piece)
     default: return 0;
     }
 }
+
+static const int phase_val[12] = {0,1,1,2,4,0, 0,1,1,2,4,0};
 
 //hard koda verdier for hvor bra det er å være for brikker (mulig å gjøre om med nevrale nettverk)
 static const int pawn_pst[64] = {
@@ -125,6 +150,31 @@ static const int king_end_pst[64] = {
    -50,-30,-30,-30,-30,-30,-30,-50
 };
 
+static int pst[12][2][64];
+static int mat_val[12];
+
+static void init_pst(void)
+{
+    static const int *src[6] = {pawn_pst, knight_pst, bishop_pst, rook_pst, queen_pst, king_mid_pst};
+    static const int val[6] = {100, 320, 330, 500, 900, 0};
+
+    for (int p = 0; p < 6; p++)
+    {
+        for (int sq = 0; sq < 64; sq++)
+        {
+            int f = sq ^ 56;
+            const int *eg_tab = (p == 5) ? king_end_pst : src[p];
+            pst[p][0][sq] = src[p][sq];
+            pst[p][1][sq] = eg_tab[sq];
+            pst[p + 6][0][sq] = -src[p][f];
+            pst[p + 6][1][sq] = -eg_tab[f];
+        }
+        mat_val[p] = val[p];
+        mat_val[p + 6] = -val[p];
+    }
+}
+
+
 static uint64_t zob_piece[12][64];
 static uint64_t zob_side;
 static uint64_t zob_castle[6];
@@ -161,10 +211,25 @@ void init_zobrist(void)
     for (int i = 0; i < 8; i++) zob_ep[i] = rand64();
 }
 
+int white_piece(char piece)
+{
+    switch (piece)
+    {
+        case 'P': return 1;
+        case 'B': return 1;
+        case 'N': return 1;
+        case 'R': return 1;
+        case 'Q': return 1;
+        case 'K': return 1;
+    }
+    return 0;
+}
+
 static int pst_value(char piece, int sq, int endgame)
 {
-    int idx = isupper(piece) ? sq : (sq ^ 56);
-    switch (toupper(piece))
+    int idx = white_piece(piece) ? sq : (sq ^ 56);
+    char up_piece = to_upper(piece);
+    switch (up_piece)
     {
         case 'P': return pawn_pst[idx];
         case 'N': return knight_pst[idx];
@@ -174,6 +239,20 @@ static int pst_value(char piece, int sq, int endgame)
         case 'K': return endgame ? king_end_pst[idx] : king_mid_pst[idx];
         default:  return 0;
     }
+}
+
+int black_piece(char piece)
+{
+    switch (piece)
+    {
+        case 'p': return 1;
+        case 'b': return 1;
+        case 'n': return 1;
+        case 'r': return 1;
+        case 'q': return 1;
+        case 'k': return 1;
+    }
+    return 0;
 }
 
 typedef struct { int from; int to; char promo; int score; } Move;
@@ -219,6 +298,7 @@ void init_position(Position *pos)
     pos->b_king = 4;
     pos->w_king = 60;
     pos->hash = compute_hash(pos);
+    pos->halfmove = 0;
 }
 
 void init_kiwipete(Position *pos) // typisk midtspill posisjon
@@ -241,6 +321,10 @@ void init_kiwipete(Position *pos) // typisk midtspill posisjon
     pos->b_king = 4;
     pos->w_king = 60;
     pos->hash = compute_hash(pos);
+    pos->mg = 0;
+    pos->eg = 1;
+    pos->phase = 0;
+    pos->piece_count = {};
 }
 
 void init_rook_endgame(Position *pos)
@@ -262,6 +346,7 @@ void init_rook_endgame(Position *pos)
     pos->move_number = 0;
     pos->b_king = 19;
     pos->w_king = 21;
+    pos->hash = compute_hash(pos);
 }
 
 
@@ -271,7 +356,7 @@ int is_enemy(char target_piece, int my_color) {
         return 0;
     }
     int target_color;
-    if (isupper(target_piece)) {
+    if (white_piece(target_piece)) {
         target_color = -1;
     }
     else
@@ -379,9 +464,23 @@ int en_passant(const Position *pos, int index[])
 static void set_sq(Position *pos, int sq, char piece)
 {
     int old = piece_index(pos->board[sq]);
-    if (old >= 0) pos->hash ^= zob_piece[old][sq];
+    if (old >= 0) 
+    {
+        pos->hash ^= zob_piece[old][sq];
+        pos->mg -= mat_val[old] + pst[old][0][sq];
+        pos->eg -= mat_val[old] + pst[old][1][sq];
+        pos->phase -= phase_val[old];
+        pos->piece_count[old]--;
+    }
     int nw = piece_index(piece);
-    if (nw >= 0) pos->hash ^= zob_piece[nw][sq];
+    if (nw >= 0) 
+    {
+        pos->hash ^= zob_piece[nw][sq];
+        pos->mg += mat_val[nw] + pst[nw][0][sq];
+        pos->eg += mat_val[nw] + pst[nw][1][sq];
+        pos->phase += phase_val[nw];
+        pos->piece_count[nw]++;
+    }
     pos->board[sq] = piece;
 }
 
@@ -393,11 +492,11 @@ void move_push(Position *pos, int index[3])
     {
         // fjerner bare bonden hvis trekket faktisk er en passant
         // (går til ruta bak bonden som gikk to frem)
-        if (isupper(piece) && index[1] + 8 == pos->en_passant[1])
+        if (white_piece(piece) && index[1] + 8 == pos->en_passant[1])
         {
             set_sq(pos, index[1] + 8, '.');
         }
-        if (islower(piece) && index[1] - 8 == pos->en_passant[1])
+        if (black_piece(piece) && index[1] - 8 == pos->en_passant[1])
         {
             set_sq(pos, index[1] - 8, '.');
         }
@@ -437,7 +536,7 @@ void move_push(Position *pos, int index[3])
     {
         char promo = tolower(index[2]);
         if (promo != 'q' && promo != 'r' && promo != 'b' && promo != 'n') promo = 'q';
-        char piecee = isupper(piece) ? toupper(promo) : promo;
+        char piecee = white_piece(piece) ? to_upper(promo) : promo;
         set_sq(pos, index[1], piecee);
     }
 }
@@ -446,6 +545,9 @@ void make_move(Position *pos, int from, int to, int promo)
 {
     int index[3] = {from, to, promo};
     char piece = pos->board[index[0]];
+    int reset = (to_upper(piece) == 'P') || (pos->board[to] != '.');
+    if (pos->move_number >= 0 && pos->move_number < HIST_SIZE) 
+        hash_history[pos->move_number] = pos->hash;
     int old_moved[6];
     memcpy(old_moved, pos->moved, sizeof old_moved);
     if (pos->en_passant[1] != 0) pos->hash ^= zob_ep[pos->en_passant[1] % 8];
@@ -456,7 +558,19 @@ void make_move(Position *pos, int from, int to, int promo)
     for (int i = 0; i < 6; i++) if (old_moved[i] != pos->moved[i]) pos->hash ^= zob_castle[i];
     if (pos->en_passant[1] != 0) pos->hash ^= zob_ep[pos->en_passant[1] % 8];
     pos->hash ^= zob_side;
+    pos->halfmove = reset ? 0 : pos->halfmove + 1;
     pos->move_number++;
+}
+
+int is_repetition(const Position *pos)
+{
+    int stop = pos->move_number - pos->halfmove;
+    if (stop < 0) stop = 0;
+    for (int i = pos->move_number - 2; i >= stop; i -= 2)
+    {
+        if (i < HIST_SIZE && hash_history[i] == pos->hash) return 1;
+    }
+    return 0;
 }
 
 int castle_rights(const Position *pos, int king_index, int rook_index)
@@ -865,7 +979,7 @@ int check_check(const Position *pos, int defender_color)
 
             if (is_enemy(piece, defender_color))
             {
-                char type = toupper(piece);
+                char type = to_upper(piece);
                 if (type == 'Q') return 1;
                 if (type == 'R' && is_straight_line) return 1;
                 if (type == 'B' && !is_straight_line) return 1;
@@ -890,7 +1004,7 @@ void castle(const Position *pos, int indexes[], int legalmoves_out[], int *idx)
 {
     char piece = pos->board[indexes[0]];
     int color;
-    if (isupper(piece)) {color = -1;}
+    if (white_piece(piece)) {color = -1;}
     else {color = 1;}
 
     int step = (indexes[1] > indexes[0]) ? 1 : -1; // 1 = kort rokade, -1 = lang rokade
@@ -948,14 +1062,14 @@ int piecemove(const Position *pos, char move[], int legalmoves_out[]) {
     int color;
     int idx = 0;
 
-    if (isupper(piece)) {
+    if (white_piece(piece)) {
         color = -1;
     } else {
         color = 1;
     }
 
-    if ((pos->move_number % 2 == 0 && isupper(piece))
-        || (pos->move_number % 2 == 1 && islower(piece)))
+    if ((pos->move_number % 2 == 0 && white_piece(piece))
+        || (pos->move_number % 2 == 1 && black_piece(piece)))
     {
         if (piece == 'k' && indexes[1] == 2 && indexes[0] == 4)
             castle(pos, indexes, legalmoves_out, &idx);
@@ -966,17 +1080,17 @@ int piecemove(const Position *pos, char move[], int legalmoves_out[]) {
         if (piece == 'K' && indexes[1] == 62 && indexes[0] == 60)
             castle(pos, indexes, legalmoves_out, &idx);
 
-        if (toupper(piece) == 'P') pawn_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'P') pawn_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'N') knight_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'N') knight_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'R') rook_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'R') rook_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'B') bishop_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'B') bishop_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'Q') queen_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'Q') queen_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'K') king_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'K') king_move(pos, color, indexes, &idx, legalmoves_out);
 
         int count = 0;
         for (int i = 0; i < idx; i++)
@@ -1000,14 +1114,14 @@ int piecemove_fast(const Position *pos, int indexes[], int legalmoves_out[], int
     int color;
     int idx = 0;
 
-    if (isupper(piece)) {
+    if (white_piece(piece)) {
         color = -1;
     } else {
         color = 1;
     }
 
-    if ((pos->move_number % 2 == 0 && isupper(piece))
-        || (pos->move_number % 2 == 1 && islower(piece)))
+    if ((pos->move_number % 2 == 0 && white_piece(piece))
+        || (pos->move_number % 2 == 1 && black_piece(piece)))
     {
         if (piece == 'k' && indexes[1] == 2 && indexes[0] == 4)
             castle(pos, indexes, legalmoves_out, &idx);
@@ -1018,19 +1132,19 @@ int piecemove_fast(const Position *pos, int indexes[], int legalmoves_out[], int
         if (piece == 'K' && indexes[1] == 62 && indexes[0] == 60)
             castle(pos, indexes, legalmoves_out, &idx);
 
-        if (toupper(piece) == 'P') pawn_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'P') pawn_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'N') knight_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'N') knight_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'R') rook_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'R') rook_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'B') bishop_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'B') bishop_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'Q') queen_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'Q') queen_move(pos, color, indexes, &idx, legalmoves_out);
 
-        if (toupper(piece) == 'K') king_move(pos, color, indexes, &idx, legalmoves_out);
+        if (to_upper(piece) == 'K') king_move(pos, color, indexes, &idx, legalmoves_out);
 
-        int is_king = (toupper(piece) == 'K');
+        int is_king = (to_upper(piece) == 'K');
 
         int count = 0;
         for (int i = 0; i < idx; i++)
@@ -1039,7 +1153,7 @@ int piecemove_fast(const Position *pos, int indexes[], int legalmoves_out[], int
 
             if (captures_only && pos->board[to] == '.') continue;
 
-            int is_en_passant = (toupper(piece) == 'P'
+            int is_en_passant = (to_upper(piece) == 'P'
                                 && to % 8 != indexes[0] % 8
                                 && pos->board[to] == '.');
 
@@ -1101,7 +1215,7 @@ void find_pin(const Position *pos, int color, char pinned[64])
 
             if (own_piece != -1)
             {
-                char type = toupper(piece);
+                char type = to_upper(piece);
                 if ((type == 'Q')
                     || (type == 'R' && is_straight_line)
                     || (type == 'B' && !is_straight_line))
@@ -1220,11 +1334,11 @@ void random_move(const Position *pos, char move[5])
     {
         if (pos->board[i] != '.')
         {
-            if (isupper(pos->board[i]))
+            if (white_piece(pos->board[i]))
             {
             pieces[idx++] = i;
             }
-            if (islower(pos->board[i]))
+            if (black_piece(pos->board[i]))
             {
             pieces[idx++] = i;
             }
@@ -1260,7 +1374,7 @@ int count_all_legal_moves(const Position *pos, int color)
         char piece = pos->board[i];
         if (piece == '.') continue;
 
-        int piece_color = isupper(piece) ? -1 : 1;
+        int piece_color = white_piece(piece) ? -1 : 1;
         if (piece_color != color) continue;
 
         char move[5];
@@ -1458,7 +1572,7 @@ static int sq_distance(int a, int b) // antall kongetrekk mellom to ruter
     return dr > dc ? dr : dc;
 }
 
-int evaluate(Position *pos)
+int evaluate_slow(Position *pos)
 {
     int phase = 0;
     int w_mat = 0;
@@ -1493,7 +1607,7 @@ int evaluate(Position *pos)
 
             if (piece == 'K' || piece == 'k') continue;
 
-            if (isupper(piece)) w_mat += piece_value(piece) + pst_value(piece, i, 0);
+            if (white_piece(piece)) w_mat += piece_value(piece) + pst_value(piece, i, 0);
             else b_mat += piece_value(piece) + pst_value(piece, i, 0);
         }
     }
@@ -1611,7 +1725,7 @@ int has_non_pawn(Position *pos, int color)
     {
         char p = pos->board[i];
         if (p == '.' || p == 'P' || p == 'p' || p == 'K' || p == 'k') continue;
-        if ((color == -1) == (isupper(p) != 0)) return 1; 
+        if ((color == -1) == (white_piece(p) != 0)) return 1; 
     }
     return 0;
 }
@@ -1628,8 +1742,10 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
     if (ply >= MAX_PLY) ply = MAX_PLY - 1;
     int side = pos->move_number % 2;
 
+    if (ply > 0 && (pos->halfmove >= 100 || is_repetition(pos))) return 0;
+
     int in_check = check_check(pos, color);
-    if (in_check) depth++;
+    int one_extra_depth = (in_check) ? 1 : 0;
 
     if (depth == 0)
     {
@@ -1645,11 +1761,16 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
         has_tt_move = 1;
         if (e->depth >= depth)
         {
-            if (e->flag == TT_EXACT) return e->score;
-            if (e->flag == TT_LOWER && e->score >= beta) return e->score;
-            if (e->flag == TT_UPPER && e->score <= alpha) return e->score;
+            int s = e->score;
+            if (s > MATE_BOUND) s -= ply;
+            else if (s < -MATE_BOUND) s += ply;
+
+            if (e->flag == TT_EXACT) return s;
+            if (e->flag == TT_LOWER && s >= beta) return s;
+            if (e->flag == TT_UPPER && s <= alpha) return s;
         }
     }
+
 
 
     if (allow_null && !in_check && depth >= 3 && has_non_pawn(pos, color))
@@ -1660,8 +1781,10 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
         temp.en_passant[1] = 0;
         temp.move_number++;
         temp.hash ^= zob_side;
+        int R;
+        if (depth >= 6) R = 3;
+        else R = 2;
 
-        int R = 2;
         int score = -negamax(&temp, depth - 1 - R, -beta, -beta + 1, 0);
         if (stop_search) return 0;
         if (score >= beta) return beta;
@@ -1675,7 +1798,7 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
 
     if (list.count == 0)
     {
-        if (in_check) return -(100000 + depth);
+        if (in_check) return -(MATE_SCORE - ply);
         return 0;
     }
 
@@ -1723,16 +1846,16 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
         int score;
         if (move_n >= 3 && depth >= 3 && !in_check && !is_capture && !m.promo)
         {
-            score = -negamax(&temp, depth - 2, -alpha - 1, -alpha, 1);
+            score = -negamax(&temp, depth - 2 + one_extra_depth, -alpha - 1, -alpha, 1);
 
             if (score > alpha)
             {
-                score = -negamax(&temp, depth - 1, -beta, -alpha, 1);
+                score = -negamax(&temp, depth - 1 + one_extra_depth, -beta, -alpha, 1);
             }
         }
         else
         {
-            score = -negamax(&temp, depth - 1, -beta, -alpha, 1);
+            score = -negamax(&temp, depth - 1 + one_extra_depth, -beta, -alpha, 1);
         }
         if (stop_search) return 0;
         if (score > best_score)
@@ -1743,7 +1866,7 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
         if (best_score > alpha) alpha = best_score;
         if (alpha >= beta)
         {
-            if (!is_capture && !m.promo && killers[ply][0].to == m.to)
+            if (!is_capture && !m.promo && !(killers[ply][0].from == m.from && killers[ply][0].to == m.to))
             {
                 killers[ply][1] = killers[ply][0];
                 killers[ply][0] = m;
@@ -1761,15 +1884,25 @@ int negamax(Position *pos, int depth, int alpha, int beta, int allow_null)
         }
 
     }
-    e->key = pos->hash;
-    e->depth = depth;
-    e->score = best_score;
-    e->flag = (best_score <= alpha_orig) ? TT_UPPER
-            : (best_score >= beta) ? TT_LOWER
-            : TT_EXACT;
-    e->from = best_m.from;
-    e->to = best_m.to;
-    e->promo = best_m.promo;
+
+    int stored = best_score;
+    if (stored > MATE_BOUND) stored += ply;
+    else if (stored < - MATE_BOUND) stored -= ply;
+
+
+    if (e->key != pos->hash || depth >= e->depth || e->age != tt_age)
+    {
+        e->key = pos->hash;
+        e->depth = depth;
+        e->score = stored;
+        e->flag = (stored <= alpha_orig) ? TT_UPPER
+                : (stored >= beta) ? TT_LOWER
+                : TT_EXACT;
+        e->from = best_m.from;
+        e->to = best_m.to;
+        e->promo = best_m.promo;
+        e->age = tt_age;
+    }
     return best_score;
 }
 
@@ -1813,6 +1946,7 @@ Move best_move(Position *pos, int depth, Move first)
 
 Move think(Position *pos, int soft_ms, int hard_ms, int max_depth)
 {
+    tt_age++;
     search_start = clock();
     hard_limit_ms = hard_ms;
     stop_search = 0;
@@ -1958,7 +2092,7 @@ void uci_loop(void)
 void motor(void)
 {
     Position pos;
-    init_rook_endgame(&pos);
+    init_position(&pos);
     char move[10] = "";
 
     board_print(&pos);
@@ -2013,6 +2147,7 @@ void time_it(void)
 int main(int argc, char *argv[])
 {
     init_zobrist();
+    init_pst();
     srand(time(NULL));
     if ((argc > 1 && strcmp(argv[1], "uci") == 0) || !_isatty(_fileno(stdin)))
     {
